@@ -1,0 +1,3 @@
+TRANSPECT_MARKER_LARGE_FILE_001
+This fixture is intentionally small in source control. Integration tests may expand its copied snapshot to exercise large request handling.
+

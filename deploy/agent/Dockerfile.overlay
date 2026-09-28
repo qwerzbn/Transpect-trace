@@ -1,0 +1,13 @@
+# Offline development overlay. The base tag must be created from the normal Dockerfile first.
+# It updates only Transpect code and keeps the already-pinned official Codex CLI binary.
+FROM transpect-trace-codex:0.3.1-base
+
+USER root
+WORKDIR /opt/transpect-trace
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir --no-deps .
+
+USER agent
+WORKDIR /workspace
+ENTRYPOINT ["ttrace-agent"]

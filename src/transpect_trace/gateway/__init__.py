@@ -1,0 +1,2 @@
+"""Protocol-aware model gateway."""
+

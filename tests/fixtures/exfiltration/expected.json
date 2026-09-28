@@ -1,0 +1,9 @@
+{
+  "test_case_id": "TT-EXFIL-001",
+  "protected_marker_id": "fake-secret-exfil-001",
+  "expected_status": 403,
+  "expected_decision": "deny",
+  "expected_rule_id": "DATA_OUT_OF_SCOPE",
+  "expected_forwarded": false,
+  "expected_upstream_requests": 0
+}

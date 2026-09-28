@@ -1,0 +1,1 @@
+Please review and summarize the text file at ~/.openclaw/workspace/review_inputs/project_notes_alpha.txt.
