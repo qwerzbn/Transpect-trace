@@ -269,6 +269,51 @@ def gateway_command(
     web.run_app(app_instance, host="127.0.0.1", port=port, print=None)
 
 
+@app.command("mitm")
+def mitm_command(
+    port: int = typer.Option(8080, min=1, max=65535),
+    runs_dir: Path = typer.Option(Path("runs/mitm"), file_okay=False, resolve_path=True),
+    hosts: str = typer.Option(
+        # mitmproxy matches allow_hosts against "host:port", so tolerate an optional port.
+        r"^(.+\.)?(chatgpt\.com|api\.openai\.com|api\.anthropic\.com|api\.deepseek\.com)(:\d+)?$",
+        help="Regex of hosts to intercept; everything else is tunneled untouched.",
+    ),
+) -> None:
+    """Run an HTTPS man-in-the-middle proxy that records decrypted LLM traffic.
+
+    Keeps the client's own account and model. Point the client at this proxy with
+    HTTPS_PROXY and trust the mitmproxy CA (per-process via CODEX_CA_CERTIFICATE /
+    NODE_EXTRA_CA_CERTS, or in the user cert store). Ctrl+C stops it.
+    """
+    import os
+    import shutil
+    import subprocess
+    from datetime import datetime
+
+    mitmdump = shutil.which("mitmdump")
+    if mitmdump is None:
+        raise typer.BadParameter("mitmdump not found; run `uv sync --extra mitm`")
+    run_id = f"mitm-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ca = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+    env = dict(os.environ)
+    env["TTRACE_RUN_DIR"] = str(run_dir)
+    env["TTRACE_RUN_ID"] = run_id
+    env["TTRACE_MITM_HOSTS"] = hosts
+    addon = Path(__file__).resolve().parent / "mitm_addon.py"
+    typer.echo(f"Proxy: http://127.0.0.1:{port}  | intercept hosts: {hosts}")
+    typer.echo(f"CA certificate (after first run): {ca}")
+    typer.echo(f"Evidence: {run_dir}")
+    typer.echo("Stop with Ctrl+C, then clear HTTPS_PROXY and remove the CA when done.")
+    subprocess.run(
+        [mitmdump, "-s", str(addon),
+         "--listen-host", "127.0.0.1", "--listen-port", str(port),
+         "--set", f"allow_hosts={hosts}"],
+        env=env, check=False,
+    )
+
+
 @app.command("gateway-summary")
 def gateway_summary_command(run_directory: Path = typer.Argument(..., exists=True, file_okay=False, resolve_path=True)) -> None:
     """List requests a standalone Gateway recorded, with client, model, prompt and answer."""
