@@ -44,8 +44,8 @@
 需要 git、[uv](https://docs.astral.sh/uv/)、Codex 桌面版。CLI 测试另外需要 Codex CLI，可以用 `npm install --global @openai/codex` 安装。
 
 ```bash
-git clone https://github.com/qwerzbn/transpect-trace.git
-cd transpect-trace
+git clone https://github.com/qwerzbn/Transpect-trace.git
+cd Transpect-trace
 uv sync
 ```
 
