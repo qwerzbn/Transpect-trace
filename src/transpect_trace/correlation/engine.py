@@ -166,12 +166,12 @@ def correlate_run(run_dir: Path | str, events: list[TraceEvent] | None = None) -
     edges: list[dict[str, Any]] = []
 
     by_request: dict[str, list[TraceEvent]] = defaultdict(list)
-    by_tool: dict[str, list[TraceEvent]] = defaultdict(list)
+    by_tool: dict[tuple[str, str | None, str], list[TraceEvent]] = defaultdict(list)
     for event in events:
         if event.correlation.request_id:
             by_request[event.correlation.request_id].append(event)
         if event.correlation.tool_call_id:
-            by_tool[event.correlation.tool_call_id].append(event)
+            by_tool[(event.source.collector, event.correlation.session_id, event.correlation.tool_call_id)].append(event)
 
     for request_events in by_request.values():
         ordered = sorted(request_events, key=lambda event: event.ingest_seq)
@@ -195,8 +195,11 @@ def correlate_run(run_dir: Path | str, events: list[TraceEvent] | None = None) -
     process_starts = [event for event in events if event.kind == "system.process.started"]
     network_events = [event for event in events if event.kind in {"system.network.connect", "system.network.sent"}]
 
+    def same_agent(left: TraceEvent, right: TraceEvent) -> bool:
+        return (left.attributes.get("agent_id") or "main") == (right.attributes.get("agent_id") or "main")
+
     for request in model_requests:
-        source = _nearest_before([*prompts, *tool_results], request)
+        source = _nearest_before([e for e in [*prompts, *tool_results] if same_agent(e, request)], request)
         if source:
             edges.append(_edge(source, request, "caused_request", 0.8, "nearest_preceding_client_event"))
         network = _nearest_before(network_events, request, window=10.0) or _nearest_after(network_events, request, window=10.0)
@@ -204,7 +207,10 @@ def correlate_run(run_dir: Path | str, events: list[TraceEvent] | None = None) -
             edges.append(_edge(network, request, "transported_request", 0.6, "time_window"))
 
     for response in response_ends:
-        tool = _nearest_after(tool_starts, response, window=30.0)
+        # Terminals carry request_id; recover the corresponding request's
+        # explicit agent identity before doing any temporal inference.
+        request = next((r for r in model_requests if r.correlation.request_id == response.correlation.request_id), None)
+        tool = _nearest_after([t for t in tool_starts if request is None or same_agent(t, request)], response, window=30.0)
         if tool:
             edges.append(_edge(response, tool, "caused_tool", 0.7, "nearest_following_tool"))
 

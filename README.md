@@ -33,7 +33,21 @@ Provider-specific `DEEPSEEK_API_KEY` and `ANTHROPIC_API_KEY` variables are also 
 
 ## Run a controlled trace
 
-Only use an isolated fixture workspace containing fake `TRANSPECT_MARKER_*` data.
+### Interactive trace demo and custom prompts
+
+```powershell
+uv run ttrace demo
+uv run ttrace trace --workspace D:\demo\my-project --prompt "Explain the program entry point"
+uv run ttrace report runs\demo\<run-id>
+```
+
+Runs automatically produce an offline HTML/JSON report with an Agent call tree,
+an OS process tree, file-to-request/tool content matches, and inspectable evidence.
+The demo uses a real independent Codex child via an explicit MCP adapter and a
+local receipt sink. `trace` accepts ordinary workspaces without fixture markers,
+runs in a copy, and records full task payloads. See [demo instructions and limits](docs/trace-demo.md).
+
+The original `run`/`codex`/`claude` fixture commands below require an isolated workspace containing fake `TRANSPECT_MARKER_*` data. Use `trace` for an ordinary task workspace.
 
 The shortest Codex command uses the included fake-data workspace and prompt:
 
@@ -124,3 +138,7 @@ uv run pytest
 ```
 
 The existing `D:\code\Transpect` repository is not a runtime dependency. The new implementation retains only its validated ideas: external credential isolation, Codex JSON parsing, layered correlation keys, and system evidence collection.
+# 实时树文件
+
+默认导出 JSON/TXT，网页可选。桌面聊天监听、后台启动和改写来源标签的使用与限制见
+[持续追踪说明](docs/live-tracing.md)。

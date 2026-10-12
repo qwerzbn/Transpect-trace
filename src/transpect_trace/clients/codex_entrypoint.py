@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,7 @@ def _codex_metadata(executable: str) -> dict[str, Any]:
     }
 
 
-def _write_codex_config(home: Path, *, base_url: str, otel_endpoint: str, enable_injecagent: bool = False) -> None:
+def _write_codex_config(home: Path, *, base_url: str, otel_endpoint: str, enable_injecagent: bool = False, enable_demo: bool = False) -> None:
     home.mkdir(parents=True, exist_ok=True)
     content = f"""model_provider = "deepseek"
 approval_policy = "never"
@@ -62,6 +63,16 @@ command = "python3"
 args = ["-m", "transpect_trace.clients.injecagent_mcp"]
 startup_timeout_sec = 20
 tool_timeout_sec = 60
+"""
+    if enable_demo:
+        content += """
+
+[mcp_servers.trace_demo]
+command = "python3"
+args = ["-m", "transpect_trace.clients.demo_mcp"]
+env_vars = ["PYTHONPATH", "TTRACE_RUN_DIR", "TTRACE_WORKSPACE", "TTRACE_MODEL_BASE_URL", "TTRACE_MODEL", "TTRACE_OTEL_ENDPOINT", "TTRACE_FRIDA_LOG_DIR"]
+startup_timeout_sec = 90
+tool_timeout_sec = 600
 """
     atomic_write(home / "config.toml", content.encode("utf-8"))
 
@@ -119,9 +130,10 @@ def main() -> int:
     codex_home = Path("/tmp/transpect-codex-home")
     _write_codex_config(
         codex_home,
-        base_url=base_url,
+        base_url=base_url.rstrip("/") + "/agents/main",
         otel_endpoint=otel_endpoint,
         enable_injecagent=bool(os.environ.get("TTRACE_INJECAGENT_CASE_FILE")),
+        enable_demo=os.environ.get("TTRACE_DEMO_TOOLS") == "1",
     )
 
     adapter = CodexAdapter(executable)
@@ -152,6 +164,14 @@ def main() -> int:
         bufsize=1,
     )
     sequence = 1
+    # Drain stderr concurrently: a full pipe otherwise stalls the client while
+    # this process is waiting for the next stdout event.
+    stderr_parts: list[str] = []
+    def drain_stderr() -> None:
+        assert process.stderr is not None
+        stderr_parts.append(process.stderr.read())
+    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+    stderr_thread.start()
     assert process.stdout is not None
     for line in process.stdout:
         text = line.rstrip("\r\n")
@@ -176,8 +196,9 @@ def main() -> int:
         print(text, flush=True)
 
     assert process.stderr is not None
-    stderr = process.stderr.read()
     return_code = process.wait()
+    stderr_thread.join()
+    stderr = "".join(stderr_parts)
     atomic_write(run_dir / "raw/client/stderr.log", stderr.encode("utf-8", errors="replace"))
     sequence += 1
     bundle.append_jsonl(

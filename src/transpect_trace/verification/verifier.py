@@ -126,13 +126,13 @@ def verify_bundle(run_dir: Path | str, *, check_checksums: bool = True, write_re
     content_rows, content_errors = _jsonl(bundle.root / "normalized/content_index.jsonl")
     errors.extend(content_errors)
     request_ids: dict[str, set[str]] = defaultdict(set)
-    tool_ids: dict[str, set[str]] = defaultdict(set)
+    tool_ids: dict[tuple[str, str | None, str], set[str]] = defaultdict(set)
     counts = Counter(event.kind for event in events)
     for event in events:
         if event.correlation.request_id:
             request_ids[event.correlation.request_id].add(event.kind)
         if event.correlation.tool_call_id:
-            tool_ids[event.correlation.tool_call_id].add(event.kind)
+            tool_ids[(event.source.collector, event.correlation.session_id, event.correlation.tool_call_id)].add(event.kind)
     terminal_requests = sum(
         1 for kinds in request_ids.values()
         if "model.request" in kinds

@@ -34,6 +34,8 @@ def _read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:
+                if not line.endswith("\n"):
+                    continue  # collector may still be appending this record
                 yield {"_parse_error": True, "line_number": line_number, "text": line.rstrip("\r\n")}
                 continue
             if isinstance(value, dict):
@@ -90,11 +92,11 @@ def _candidate(
     }
 
 
-def _client_candidates(bundle: TraceBundle, manifest: Manifest) -> Iterable[dict[str, Any]]:
+def _client_candidates(bundle: TraceBundle, manifest: Manifest, *, relative: str = "raw/client/events.jsonl", agent_id: str = "main") -> Iterable[dict[str, Any]]:
     adapter = CodexAdapter()
     current_session: str | None = None
     current_turn: str | None = None
-    for raw in _read_jsonl(bundle.root / "raw/client/events.jsonl"):
+    for raw in _read_jsonl(bundle.root / relative):
         sequence = int(raw.get("collector_seq") or 1)
         wall = str(raw.get("captured_at") or manifest.started_at)
         monotonic = int(raw.get("monotonic_ns") or 0)
@@ -132,10 +134,10 @@ def _client_candidates(bundle: TraceBundle, manifest: Manifest) -> Iterable[dict
         elif event_type.startswith("turn."):
             current_turn = str(event.get("turn_id") or current_turn or "") or None
             kind, operation, target = f"client.{event_type}", event_type.rsplit(".", 1)[-1], "turn"
-        elif item_type in {"command_execution", "mcp_tool_call"}:
-            phase = "started" if event_type.endswith("started") else "completed"
+        elif item_type in {"command_execution", "mcp_tool_call", "collab_agent_tool_call"}:
+            phase = "started" if event_type.endswith("started") else "completed" if event_type.endswith("completed") else "updated"
             kind, operation = f"client.tool.{phase}", "execute"
-            target = str(parsed.get("command") or (event.get("item") or {}).get("name") or item_type)
+            target = str(parsed.get("command") or (event.get("item") or {}).get("tool") or (event.get("item") or {}).get("name") or item_type)
         elif item_type == "agent_message":
             kind, operation, target = "client.assistant_message", "message", "assistant"
         elif item_type == "reasoning":
@@ -159,8 +161,23 @@ def _client_candidates(bundle: TraceBundle, manifest: Manifest) -> Iterable[dict
             manifest=manifest, collector="client.codex", collector_seq=sequence, wall=wall,
             monotonic_ns=monotonic, plane="client", kind=kind, trust="application",
             operation=operation, target=target, correlation=correlation, content=content,
-            attributes={"codex_event_type": event_type, "item_type": item_type, "event": event},
+            attributes={"codex_event_type": event_type, "item_type": item_type, "event": event, "agent_id": agent_id, "raw_file": relative},
         )
+
+
+def _demo_candidates(bundle: TraceBundle, manifest: Manifest) -> Iterable[dict[str, Any]]:
+    for raw in _read_jsonl(bundle.root / "raw/client/demo-events.jsonl"):
+        yield _candidate(
+            manifest=manifest, collector="adapter.demo", collector_seq=int(raw.get("collector_seq", 1)),
+            wall=raw.get("captured_at", manifest.started_at), monotonic_ns=raw.get("monotonic_ns", 0),
+            plane="client", kind="demo." + raw.get("kind", "unknown"), trust="application",
+            operation=raw.get("kind", "unknown"), target=raw.get("tool_name") or raw.get("agent_id"),
+            correlation=Correlation(pid=raw.get("pid"), tool_call_id=raw.get("invocation_id")), attributes=raw,
+        )
+    for path in sorted((bundle.root / "raw/client").glob("child-*.jsonl")):
+        for candidate in _client_candidates(bundle, manifest, relative=path.relative_to(bundle.root).as_posix(), agent_id=path.stem):
+            candidate["collector"] = "client.codex." + path.stem
+            yield candidate
 
 
 def _claude_client_candidates(bundle: TraceBundle, manifest: Manifest) -> Iterable[dict[str, Any]]:
@@ -486,6 +503,8 @@ def _run_candidates(manifest: Manifest) -> Iterable[dict[str, Any]]:
                 wall=manifest.ended_at or manifest.started_at, monotonic_ns=0, plane="run", kind="collector.gap", trust="derived",
                 operation="gap", target=collector.name, attributes={"dropped_events": collector.dropped_events},
             )
+    if manifest.status == "running":
+        return
     sequence += 1
     terminal_kind = "run.completed" if manifest.status == "complete" else "run.failed"
     yield _candidate(
@@ -496,13 +515,14 @@ def _run_candidates(manifest: Manifest) -> Iterable[dict[str, Any]]:
     )
 
 
-def normalize_run(run_dir: Path | str) -> list[TraceEvent]:
+def normalize_run(run_dir: Path | str, *, write: bool = True) -> list[TraceEvent]:
     bundle = TraceBundle(run_dir)
     manifest = Manifest.model_validate_json((bundle.root / "manifest.json").read_text(encoding="utf-8"))
     candidates = [
         *_run_candidates(manifest),
         *(_claude_client_candidates(bundle, manifest) if manifest.client == "claude" else _client_candidates(bundle, manifest)),
         *_injecagent_mcp_candidates(bundle, manifest),
+        *_demo_candidates(bundle, manifest),
         *_gateway_candidates(bundle, manifest),
         *_system_candidates(bundle, manifest),
         *_frida_candidates(bundle, manifest),
@@ -528,5 +548,6 @@ def normalize_run(run_dir: Path | str) -> list[TraceEvent]:
                 attributes=row["attributes"],
             )
         )
-    bundle.write_events(events)
+    if write:
+        bundle.write_events(events)
     return events

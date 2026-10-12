@@ -57,7 +57,7 @@ def _operation(call: str, args: str, result: str) -> tuple[str, str, str | None,
         path_index = 0 if call in {"open", "creat"} else 0
         target = quoted[path_index] if len(quoted) > path_index else None
         opened_fd, result_target = _fd(result)
-        return "system.file.opened", call, target or result_target, opened_fd
+        return "system.file.opened", call, result_target or target, opened_fd
     if call in {"read", "pread64", "readv", "preadv"}:
         is_socket = bool(annotated and ("TCP" in annotated or "UDP" in annotated or "socket" in annotated))
         return ("system.network.received" if is_socket else "system.file.read"), call, annotated, fd
@@ -91,14 +91,26 @@ def _operation(call: str, args: str, result: str) -> tuple[str, str, str | None,
 
 def iter_strace_rows(system_dir: Path) -> Iterable[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    parent_by_pid: dict[int, int] = {}
+    parent_by_pid: dict[tuple[str, int], int] = {}
     for path in sorted(system_dir.glob("*strace*")):
         if not path.is_file():
             continue
         match_pid = PID_RE.search(path.name)
         pid = int(match_pid.group("pid")) if match_pid else None
+        scope = "gateway" if path.name.startswith("gateway-") else "agent"
+        pending: tuple[int, str] | None = None
         for line_number, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
             line = raw_line.strip()
+            if line.endswith("<unfinished ...>"):
+                pending = (line_number, line.removesuffix("<unfinished ...>"))
+                continue
+            resumed = re.match(r"^\d+\.\d+\s+<\.\.\. \w+ resumed>(.*)$", line)
+            if resumed:
+                if pending is None:
+                    continue
+                line_number, prefix = pending
+                line = prefix + resumed.group(1)
+                pending = None
             exit_match = EXIT_RE.match(line)
             if exit_match:
                 records.append(
@@ -106,7 +118,8 @@ def iter_strace_rows(system_dir: Path) -> Iterable[dict[str, Any]]:
                         "timestamp": float(exit_match.group("timestamp")),
                         "wall": _wall(exit_match.group("timestamp")),
                         "pid": pid,
-                        "ppid": parent_by_pid.get(pid) if pid is not None else None,
+                        "ppid": None,
+                        "process_scope": scope,
                         "kind": "system.process.exited",
                         "operation": "exit",
                         "target": None,
@@ -128,13 +141,14 @@ def iter_strace_rows(system_dir: Path) -> Iterable[dict[str, Any]]:
             kind, operation, target, fd = _operation(call, args, result)
             result_value = _result_int(result)
             if call in {"clone", "clone3", "fork", "vfork"} and pid is not None and result_value and result_value > 0:
-                parent_by_pid[result_value] = pid
+                parent_by_pid[(scope, result_value)] = pid
             records.append(
                 {
                     "timestamp": float(match.group("timestamp")),
                     "wall": _wall(match.group("timestamp")),
                     "pid": pid,
-                    "ppid": parent_by_pid.get(pid) if pid is not None else None,
+                    "ppid": None,
+                    "process_scope": scope,
                     "kind": kind,
                     "operation": operation,
                     "target": target,
@@ -148,4 +162,8 @@ def iter_strace_rows(system_dir: Path) -> Iterable[dict[str, Any]]:
                 }
             )
     records.sort(key=lambda row: (row["timestamp"], row["source_file"], row["source_line"]))
-    yield from records
+    # Files are enumerated by name, not by fork order. Resolve parents only
+    # after all fork records have been collected (including resumed calls).
+    for row in records:
+        row["ppid"] = parent_by_pid.get((row["process_scope"], row["pid"]))
+        yield row

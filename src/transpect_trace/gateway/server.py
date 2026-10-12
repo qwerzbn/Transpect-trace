@@ -99,6 +99,13 @@ async def _forward(request: web.Request) -> web.StreamResponse:
     config = request.app[CONFIG_KEY]
     recorder = request.app[RECORDER_KEY]
     path = request.path
+    # A per-agent route prefix gives concurrent child clients an explicit
+    # identity without forwarding that prefix or any tracing header upstream.
+    agent_id = None
+    parts = path.split("/", 3)
+    if len(parts) == 4 and parts[1] == "agents":
+        agent_id = parts[2]
+        path = "/" + parts[3]
     request_id = str(uuid4())
     allowed_routes = ANTHROPIC_ROUTES if config.provider == "anthropic" else DEEPSEEK_ROUTES
     if (request.method, path) not in allowed_routes:
@@ -137,6 +144,8 @@ async def _forward(request: web.Request) -> web.StreamResponse:
             if key.lower() in {"accept", "content-type", "user-agent"}
         },
         provider=config.provider,
+        agent_id=agent_id,
+        upstream=config.upstream,
         content=request_content.model_dump(mode="json"),
     )
 

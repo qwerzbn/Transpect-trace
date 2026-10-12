@@ -49,6 +49,8 @@ class RunConfig:
     supplemental_inputs: dict[str, Path] | None = None
     codex_paper_mode: bool = False
     agent_home: str | None = None
+    demo_tools: bool = False
+    require_markers: bool = True
 
 
 def _command(args: list[str], *, timeout: int = 600, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -117,9 +119,19 @@ def _snapshot_workspace(
 ) -> list[str]:
     if not source.is_dir():
         raise RunFailure(f"workspace is not a directory: {source}")
+    source, destination = source.resolve(), destination.resolve()
+    if source == destination or destination in source.parents:
+        raise RunFailure("snapshot destination must not contain the source workspace")
     if destination.exists():
-        shutil.rmtree(destination)
-    shutil.copytree(source, destination, symlinks=False, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+        raise RunFailure(f"snapshot destination already exists: {destination}")
+    excluded = {".git", "__pycache__", ".pytest_cache", ".venv", "node_modules", ".env"}
+    # A run can live below the selected workspace. Exclude that whole branch
+    # before walking it, preventing a recursively copied snapshot of itself.
+    if source in destination.parents:
+        excluded.add(destination.relative_to(source).parts[0])
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        return {name for name in names if name in excluded or name.startswith(".env.") or (Path(directory) / name).is_symlink()}
+    shutil.copytree(source, destination, symlinks=False, ignore=ignore)
     markers: set[str] = set()
     for path in destination.rglob("*"):
         if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
@@ -185,7 +197,7 @@ def run_trace(config: RunConfig) -> Path:
     markers = _snapshot_workspace(
         config.workspace.resolve(),
         bundle.root / "input/workspace",
-        require_markers=config.benchmark_case_file is None,
+        require_markers=config.require_markers and config.benchmark_case_file is None,
     )
     shutil.copytree(bundle.root / "input/workspace", bundle.root / "workspace", dirs_exist_ok=True)
     for directory in [bundle.root / "workspace", *[path for path in (bundle.root / "workspace").rglob("*") if path.is_dir()]]:
@@ -195,6 +207,11 @@ def run_trace(config: RunConfig) -> Path:
             pass
     prompt = config.prompt_file.resolve().read_text(encoding="utf-8")
     atomic_write(bundle.root / "input/prompt.txt", prompt.encode("utf-8"))
+    # Snapshot and mount the actual Python implementation, so cached images
+    # cannot silently run a previous collector version during development.
+    runtime_source = bundle.root / "input/runtime-source"
+    shutil.copytree(_project_root() / "src", runtime_source,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     for name, source in (config.supplemental_inputs or {}).items():
         if name != Path(name).name or name in {"prompt.txt", "policy.json", "injecagent-case.json"}:
             raise RunFailure(f"unsupported supplemental input name: {name}")
@@ -251,7 +268,9 @@ def run_trace(config: RunConfig) -> Path:
         ],
         configuration={
             "markers": markers,
-            "full_fake_payload_capture": True,
+            "full_payload_capture": True,
+            "fixture_markers_required": config.require_markers,
+            "demo_tools": config.demo_tools,
             "gateway_policy": policy_configuration,
             "benchmark": benchmark_configuration,
             "system_observation": {
@@ -268,6 +287,9 @@ def run_trace(config: RunConfig) -> Path:
     )
     bundle.write_manifest(manifest)
 
+    from transpect_trace.live import RunLiveWriter
+    live_writer = RunLiveWriter(bundle.root)
+    live_writer.start()
     internal_network = _safe_name(run_id, "internal")
     egress_network = _safe_name(run_id, "egress")
     gateway_name = _safe_name(run_id, "gateway")
@@ -292,6 +314,7 @@ def run_trace(config: RunConfig) -> Path:
             *[item for name in key_env_names for item in ("--env", name)],
             "--env", f"TTRACE_RUN_ID={run_id}", "--env", "TTRACE_RUN_DIR=/evidence",
             "--env", f"TTRACE_PROVIDER={config.provider}", "--env", f"TTRACE_UPSTREAM={upstream}",
+            "--env", "PYTHONPATH=/runtime-src", *_mount(runtime_source, "/runtime-src", readonly=True),
             *(["--env", "TTRACE_POLICY_FILE=/evidence/input/policy.json"] if policy_snapshot else []),
             *_mount(bundle.root / "raw/gateway", "/evidence/raw/gateway"),
             *_mount(bundle.root / "raw/system", "/evidence/raw/system"),
@@ -328,6 +351,8 @@ def run_trace(config: RunConfig) -> Path:
             "--env", "TTRACE_PROMPT_FILE=/evidence/input/prompt.txt", "--env", "TTRACE_WORKSPACE=/workspace",
             "--env", "TTRACE_MODEL_BASE_URL=http://gateway:9000", "--env", "TTRACE_OTEL_ENDPOINT=http://otel:4318",
             "--env", f"TTRACE_MODEL={selected_model}",
+            "--env", "PYTHONPATH=/runtime-src", *_mount(runtime_source, "/runtime-src", readonly=True),
+            *(["--env", "TTRACE_DEMO_TOOLS=1"] if config.demo_tools else []),
             *(["--env", "TTRACE_CODEX_PAPER_MODE=1"] if config.codex_paper_mode else []),
             *(["--env", f"TTRACE_AGENT_HOME={config.agent_home}"] if config.agent_home else []),
             *(
@@ -376,6 +401,7 @@ def run_trace(config: RunConfig) -> Path:
         for name in reversed(created_networks):
             _docker(["network", "rm", name], timeout=30, check=False)
 
+    live_writer.stop()
     for collector in manifest.collectors:
         if collector.started:
             collector.stopped = True
@@ -415,6 +441,13 @@ def run_trace(config: RunConfig) -> Path:
         if failure is None:
             failure = post_error
 
+    from transpect_trace.tree_export import export_run
+    export_run(bundle.root)
+    from transpect_trace.tree_export import export_data
+    from transpect_trace.reporting import project_report
+    final_projection = project_report(bundle.root)
+    final_projection['revision'] = live_writer.revision + 1
+    export_data(final_projection, live_writer.destination)
     if failure is not None:
         raise RunFailure(f"trace run is incomplete at {bundle.root}: {failure}") from failure
     return bundle.root

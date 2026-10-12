@@ -37,7 +37,7 @@ class CodexAdapter(ClientAdapter):
             "item_type": item_type,
             "session_id": raw.get("thread_id") or raw.get("session_id"),
             "turn_id": raw.get("turn_id"),
-            "tool_call_id": item.get("id") if item_type in {"command_execution", "mcp_tool_call"} else None,
+            "tool_call_id": item.get("id") if item_type in {"command_execution", "mcp_tool_call", "collab_agent_tool_call"} else None,
             "raw": raw,
         }
         if item_type == "command_execution":
@@ -47,4 +47,3 @@ class CodexAdapter(ClientAdapter):
         elif item_type in {"agent_message", "reasoning"}:
             result["text"] = item.get("text")
         yield result
-
