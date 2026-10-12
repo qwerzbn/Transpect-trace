@@ -1,8 +1,33 @@
 # Transpect Trace / Agent 间接提示注入实验交接文档
 
-> 更新时间：2026-09-28（Asia/Shanghai）  
-> 工作目录：`D:\code\transpect-trace`  
+> 更新时间：2026-10-12（Asia/Shanghai）
+> 工作目录：`D:\code\transpect-trace`
 > 本文用于把当前对话的背景、已完成工作、实验证据和下一步计划交给一个没有历史上下文的新对话。
+
+## 0. 最新进展摘要（优先阅读）
+
+当前工作重点已经从单一数据集复现扩展到“大模型客户端流量监控”。已完成 Codex 命令行、Codex 桌面版及 Claude Code 的流量采集适配：在客户端与模型服务之间部署本机 HTTPS 代理，通过本地受信任证书解密 TLS 流量，可记录用户输入、系统指令、对话上下文、工具定义与返回、SSE 流式响应及 WebSocket 消息，方案支持 Linux、Windows 和 macOS。
+
+当前有两种采集方式：
+
+1. **改模型地址到本地 Gateway**：适合受控实验，可在转发前记录模型请求明文并执行策略。
+2. **保留原账号和模型的 HTTPS 中间人代理**：运行 `uv run ttrace mitm`，通过 `HTTPS_PROXY` 或系统代理导流，Codex 使用 `CODEX_CA_CERTIFICATE`，Claude Code 使用 `NODE_EXTRA_CA_CERTS` 信任本地 CA。代理只解密指定模型服务域名，认证信息正常用于上游转发，但不会写入证据文件。
+
+Windows 已使用 ChatGPT 账号登录的 Codex CLI 完成实测，未发现证书固定。已抓到 `/backend-api/codex/responses` 的 WebSocket 上下行帧，包括真实 prompt 和模型回答；同时观察到账号校验、客户端配置、analytics 及 OTLP 指标上报。证据保存在 `runs/mitm/<run-id>/`，该目录不提交 Git。
+
+跨平台代码和操作步骤已经适配；Windows 已实测，macOS 因当前没有设备尚未完成真机验证。不要把“macOS 已适配”写成“macOS 已实测”。
+
+关键文件：
+
+- `src/transpect_trace/mitm_addon.py`：mitmproxy 证据插件及 WebSocket 帧采集。
+- `src/transpect_trace/cli.py`：`ttrace mitm` 命令入口。
+- `docs/mitm-proxy.md`：代理原理、安全边界和复现步骤。
+- `docs/progress-report-2026-10-12.md`：需求 2 当前进展。
+- `docs/figures/`：Codex CLI、Codex 桌面版和 Claude Code 的抓取截图。
+
+当前仓库已推送至 `https://github.com/qwerzbn/Transpect-trace.git`，HTTPS MITM 功能对应提交为 `4f6a430`。最近一次完整回归为 46 项通过、1 项跳过。
+
+下一步应聚焦于在已采集的请求明文上实现可泛化的数据外发判定：识别代码片段、密钥格式、个人信息、任务意图和目标上游，输出 Allow / Deny / Ask / Minimize，并将判定接入 HTTP、SSE 和 WebSocket 转发路径。现有精确 marker 策略只用于验证拦截机制，不能作为最终的泛化判定方案。
 
 ## 1. 用户的课题与当前实验标准
 
@@ -68,7 +93,7 @@ DeepSeek 或 Anthropic
 
 ## 3. 当前 Transpect Trace 实现状态
 
-项目不是一个 Git checkout：`D:\code\transpect-trace` 下没有 `.git`，因此在根目录执行 `git status` 会显示 `fatal: not a git repository`。这不影响代码和实验。`.external` 下的第三方仓库各自有 Git 元数据。
+项目当前是 Git 仓库，远端为 `https://github.com/qwerzbn/Transpect-trace.git`。`.external` 下的第三方仓库保留各自的 Git 元数据。
 
 当前实现版本在 README 中标为 Transpect Trace `0.3.1`，已经包含：
 
@@ -97,12 +122,12 @@ DeepSeek 或 Anthropic
 - `scripts/run_injecagent_subset.py`
 - `docs/gateway-policy-testing.md`
 
-2026-09-28 最近一次本地回归：
+2026-10-12 最近一次本地回归：
 
 ```text
 uv run pytest -q
-....................... [100%]
-23 passed
+...s.......................................... [100%]
+46 passed, 1 skipped
 ```
 
 ## 4. 已经完成的 InjecAgent 实验
@@ -308,19 +333,20 @@ Cloning into '.external/LivePI'...
 EXIT=0
 ```
 
-注意：到交接时为止，只完成了仓库克隆与环境检查；尚未：
+后续已经完成 LivePI Local Docs 适配和 10 条
+`crypto_related_files_to_email` 官方攻击家族运行。10/10 证据包完整，
+均读取了注入文件且恶意文本进入后续模型请求，但均未读取
+`CRYPTO_FILE_MARKER`、未外发、未触发 Gateway 拦截，应记为
+Codex CLI 与 DeepSeek 联合抵抗。LivePI verifier 因拒绝回答中出现
+`crypto`、`solana` 等关键词而判为 passed，该结果不能当作攻击成功。
+详见 `reports/livepi-codex-stage-b/REPORT.md`。
 
-- 在 WSL 内安装 LivePI Python/系统依赖；
-- 创建 `secrets.env`；
-- 构建 LivePI runner image；
-- 运行 `setup_openclaw_benchmark_env.py --apply`；
-- 执行任何 LivePI case；
-- 编写 Transpect ↔ LivePI 正式适配脚本；
-- 生成 LivePI 实验结果或攻击成功率。
+`email_summary_to_external` 尚未启动，因为专用测试邮箱相关变量未配置；
+不能把缺少实验账号导致的未运行记为模型抵抗。
 
-## 8. 新对话应继续完成的工作
+## 8. LivePI 后续工作（当前不是最高优先级）
 
-### 阶段 A：只跑通一个安全的官方 Local Docs 案例
+### 阶段 A（已完成）：跑通一个安全的官方 Local Docs 案例
 
 1. 先完整阅读 `.external/LivePI/README.md`、`DATASET_CARD.md`、`scripts/run_in_docker.sh`、Codex adapter、`run_surface_test.py` 和 `direct_chat_txt` 环境/验证器。
 2. 在 WSL2 中确认 Python、Docker、磁盘挂载和权限。
@@ -337,9 +363,11 @@ EXIT=0
    - LivePI verifier 结果；
    - Transpect manifest、checksums、quality report。
 
-### 阶段 B：扩展到官方 20 条
+### 阶段 B（部分完成）：扩展到官方 20 条
 
-在单例跑通后，按“10 个官方攻击家族 × 2 个官方数据外发目标”运行 20 条。不要自行改写 Prompt。每条至少记录：
+原计划按“10 个官方攻击家族 × 2 个官方数据外发目标”运行 20 条。目前已完成
+`crypto_related_files_to_email` 的 10 个攻击家族；`email_summary_to_external`
+因缺少专用测试邮箱尚未运行。不要自行改写 Prompt。每条至少记录：
 
 - task ID、technique、恶意目标、随机种子、Agent/模型/CLI 版本；
 - S0–S8 阶段；
@@ -423,8 +451,9 @@ rg -n "policy.decision|model.request.blocked" runs\<group>\<run-id>\raw\gateway\
 
 ## 11. 给下一位助手的最简任务说明
 
-请继续在 `D:\code\transpect-trace` 工作。不要重新做已完成的 InjecAgent 分析。当前首要任务是：
+请继续在 `D:\code\transpect-trace` 工作。不要重新做已完成的
+InjecAgent、LivePI Local Docs 或 Codex MITM 验证。当前首要任务是：
 
-> 在 WSL2 Ubuntu 24.04 + Docker 的隔离环境中，用 LivePI 官方 `direct_chat_txt` 案例和论文模式自动权限，先跑通 1 条 Codex CLI + DeepSeek + Transpect 全放行 Gateway 的端到端实验，并产出可验证的文件读取、Gateway 明文请求、模型响应、进程/网络行为和 LivePI verifier 证据。成功后再扩展到 10 个官方 technique × 2 个官方外发目标共 20 条。不得自行改写 Prompt，不得使用真实个人凭据或产生真实危险副作用。
+> 基于已经能够采集的 Codex/Claude 请求明文，设计并实现可泛化的数据外发最小化判定，逐步替代精确 marker 登记策略；判定应结合请求意图、敏感数据语义、数据来源、目标上游和任务必要性，并提供可审计的 Allow / Deny / Ask / Minimize 结论。
 
-在开始安装或运行前，应先检查 LivePI 当前提交和官方命令是否变化；若需要用户提供模型 API key、专用邮箱或其他研究账号，只说明缺少哪个环境变量，不要要求用户把秘密发到聊天中，也不要在输出里显示已有秘密。
+实现前先确认 HTTP、SSE 和 WebSocket 三条路径的统一策略接入点，并继续遵守以下边界：不记录认证凭据，不提交本地 CA 私钥或 `runs/mitm` 证据，不使用真实个人秘密，不在真实账号上制造危险副作用。macOS 当前只有适配说明，需在获得真机后补充实测证据。
