@@ -22,6 +22,8 @@ dependencies = [
 [project.optional-dependencies]
 export = ["pyarrow>=17,<20"]
 mitm = ["mitmproxy>=11,<13"]
+guard-probe = ["frida==17.18.0", "capstone>=5,<6", "pywinpty>=3,<4; sys_platform == 'win32'"]
+native-build = ["ziglang==0.13.0"]
 
 [dependency-groups]
 dev = ["nltk>=3.9,<4", "pytest>=8,<9", "pytest-cov>=5,<7"]

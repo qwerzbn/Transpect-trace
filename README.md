@@ -13,6 +13,8 @@ The policy mode is intentionally deterministic: configured markers map request c
 
 Python 3.12 and Docker Desktop with Linux containers are required.
 
+The separate [Windows fixed-version Codex request gate](docs/codex-guard.md) uses native runtime instrumentation and a language-neutral local policy protocol, without a model traffic proxy or TLS replacement. It does not require Docker. HTTP JSON and selected WSS messages have synthetic-origin validation; full streaming, uploads, daemon mode and whole-system protection are not claimed. Live ETW validation currently requires privileges unavailable in the recorded session.
+
 The project uses `uv` for Python, virtual environment, dependency, and lockfile management.
 
 ```powershell

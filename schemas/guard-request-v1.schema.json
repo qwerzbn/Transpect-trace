@@ -1,0 +1,134 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "transpect.guard.request/1.0",
+      "title": "Schema",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "guard_session_id": {
+      "maxLength": 96,
+      "minLength": 1,
+      "title": "Guard Session Id",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 0,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "tid": {
+      "minimum": 0,
+      "title": "Tid",
+      "type": "integer"
+    },
+    "kind": {
+      "enum": [
+        "model.request",
+        "native.initialize",
+        "native.ready",
+        "native.outcome"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "protocol": {
+      "enum": [
+        "http",
+        "wss",
+        "control"
+      ],
+      "title": "Protocol",
+      "type": "string"
+    },
+    "destination": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Destination"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "payload_utf8": {
+      "title": "Payload Utf8",
+      "type": "string"
+    },
+    "captured_qpc": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Captured Qpc"
+    },
+    "qpc_frequency": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Qpc Frequency"
+    },
+    "outcome_for_request_id": {
+      "default": "",
+      "title": "Outcome For Request Id",
+      "type": "string"
+    },
+    "outcome_action": {
+      "default": "none",
+      "enum": [
+        "none",
+        "block_request",
+        "block_session",
+        "terminate_process"
+      ],
+      "title": "Outcome Action",
+      "type": "string"
+    },
+    "outcome_captured_qpc": {
+      "default": 0,
+      "title": "Outcome Captured Qpc",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema",
+    "request_id",
+    "guard_session_id",
+    "pid",
+    "tid",
+    "kind",
+    "protocol",
+    "completeness",
+    "payload_utf8"
+  ],
+  "title": "GuardRequest",
+  "type": "object"
+}

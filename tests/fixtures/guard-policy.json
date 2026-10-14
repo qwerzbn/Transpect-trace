@@ -1,0 +1,10 @@
+{
+  "schema": "transpect.guard.policy/1.0",
+  "policy_id": "codex-local-dlp",
+  "version": "1",
+  "deny_action": "block_request",
+  "credential_rules": true,
+  "content_markers": [],
+  "registered_files": [],
+  "allowed_upstreams": []
+}

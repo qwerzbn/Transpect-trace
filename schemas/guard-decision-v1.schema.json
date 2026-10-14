@@ -1,0 +1,56 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "transpect.guard.decision/1.0",
+      "default": "transpect.guard.decision/1.0",
+      "title": "Schema",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "deny",
+        "unknown"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "none",
+        "block_request",
+        "block_session",
+        "terminate_process"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 1023,
+      "title": "Reason",
+      "type": "string"
+    },
+    "policy_version": {
+      "maxLength": 127,
+      "title": "Policy Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "request_id",
+    "decision",
+    "action",
+    "reason",
+    "policy_version"
+  ],
+  "title": "GuardDecision",
+  "type": "object"
+}
