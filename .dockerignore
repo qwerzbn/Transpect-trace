@@ -11,3 +11,7 @@ analytics
 tests
 schemas
 scripts
+.external
+build
+dist
+reports

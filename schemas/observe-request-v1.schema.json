@@ -1,0 +1,172 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.request/1.0",
+      "default": "transpect.observe.request/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "provider": {
+      "title": "Provider",
+      "type": "string"
+    },
+    "application": {
+      "title": "Application",
+      "type": "string"
+    },
+    "image_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Image Sha256"
+    },
+    "pid": {
+      "title": "Pid",
+      "type": "integer"
+    },
+    "creation_filetime": {
+      "title": "Creation Filetime",
+      "type": "integer"
+    },
+    "connection_id": {
+      "title": "Connection Id",
+      "type": "string"
+    },
+    "stream_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stream Id"
+    },
+    "protocol": {
+      "title": "Protocol",
+      "type": "string"
+    },
+    "destination": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Destination"
+    },
+    "destination_evidence": {
+      "default": "unknown",
+      "enum": [
+        "http_authority",
+        "unknown"
+      ],
+      "title": "Destination Evidence",
+      "type": "string"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "content_type": {
+      "title": "Content Type",
+      "type": "string"
+    },
+    "content_bytes": {
+      "title": "Content Bytes",
+      "type": "integer"
+    },
+    "content_sha256": {
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "llm_identification": {
+      "enum": [
+        "identified",
+        "candidate",
+        "unknown"
+      ],
+      "title": "Llm Identification",
+      "type": "string"
+    },
+    "semantics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Semantics",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "captured_qpc": {
+      "title": "Captured Qpc",
+      "type": "integer"
+    },
+    "qpc_frequency": {
+      "title": "Qpc Frequency",
+      "type": "integer"
+    },
+    "send_evidence": {
+      "default": "unverified",
+      "enum": [
+        "constructed",
+        "accepted_by_tls",
+        "unverified"
+      ],
+      "title": "Send Evidence",
+      "type": "string"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "observation_id",
+    "provider",
+    "application",
+    "pid",
+    "creation_filetime",
+    "connection_id",
+    "protocol",
+    "completeness",
+    "content_type",
+    "content_bytes",
+    "content_sha256",
+    "llm_identification",
+    "semantics",
+    "limitations",
+    "captured_qpc",
+    "qpc_frequency"
+  ],
+  "title": "RequestObservation",
+  "type": "object"
+}

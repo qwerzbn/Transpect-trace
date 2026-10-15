@@ -17,6 +17,8 @@ jobs:
         with:
           node-version: "22"
       - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.18"
       - name: Trace Codex through the local Gateway
         run: bash scripts/macos-host-trace.sh
         env:

@@ -1,14 +1,17 @@
 FROM python:3.12-slim-bookworm
 
+COPY --from=ghcr.io/astral-sh/uv:0.12.18 /uv /usr/local/bin/uv
+ENV PATH="/opt/transpect-trace/.venv/bin:$PATH" UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates strace \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/transpect-trace
-COPY pyproject.toml README.md ./
-RUN pip install --no-cache-dir "aiohttp>=3.10,<4" "jsonschema>=4.23,<5" "pydantic>=2.8,<3" "typer>=0.12,<1" "zstandard>=0.23,<1"
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-dev --no-install-project --no-cache
 COPY src ./src
-RUN pip install --no-cache-dir --no-deps .
+RUN uv sync --locked --no-dev --no-editable --no-cache
 
 EXPOSE 9000
 HEALTHCHECK --interval=2s --timeout=2s --retries=30 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=1)"]

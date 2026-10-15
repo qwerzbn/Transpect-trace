@@ -16,6 +16,8 @@ from transpect_trace.verification import verify_bundle
 app = typer.Typer(no_args_is_help=True, help="Capture and verify evidence-first traces from real LLM agent clients.")
 from transpect_trace.guard.cli import app as guard_app
 app.add_typer(guard_app,name="guard")
+from transpect_trace.observe.cli import app as observe_app
+app.add_typer(observe_app,name="observe")
 
 
 def _execute_run(config: RunConfig) -> Path:

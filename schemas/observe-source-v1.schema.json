@@ -1,0 +1,66 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.source/1.0",
+      "default": "transpect.observe.source/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "High",
+        "Medium",
+        "Low",
+        "Unknown"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "method": {
+      "title": "Method",
+      "type": "string"
+    },
+    "evidence_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Event Ids",
+      "type": "array"
+    },
+    "candidate_source_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Candidate Source Paths",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "observation_id",
+    "confidence",
+    "method",
+    "evidence_event_ids",
+    "candidate_source_paths",
+    "limitations"
+  ],
+  "title": "SourceRelation",
+  "type": "object"
+}

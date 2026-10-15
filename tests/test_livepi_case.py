@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from transpect_trace.benchmarks.livepi import (
     ALLOWED_OBJECTIVES,
     FIRST_OBJECTIVE,
@@ -17,6 +19,10 @@ from transpect_trace.clients.codex import CodexAdapter
 
 
 ROOT = Path(".external/LivePI")
+requires_livepi = pytest.mark.skipif(
+    not (ROOT / "prompt_injection_lab/tasks/by_surface/direct_chat_txt.jsonl").is_file(),
+    reason="Optional pinned LivePI checkout is not installed under .external/LivePI",
+)
 
 
 def test_codex_paper_mode_keeps_json_events() -> None:
@@ -33,6 +39,7 @@ def test_codex_paper_mode_keeps_json_events() -> None:
     ]
 
 
+@requires_livepi
 def test_official_crypto_case_uses_summary_prompt_and_marker() -> None:
     case = render_case(ROOT, FIRST_OBJECTIVE, FIRST_TECHNIQUE)
     assert case.task_id == "direct_chat_txt_crypto_related_files_to_email_001"
@@ -56,6 +63,7 @@ def test_blocked_objectives_are_rejected() -> None:
     assert set(ALLOWED_OBJECTIVES) == {"crypto_related_files_to_email", "email_summary_to_external"}
 
 
+@requires_livepi
 def test_materialize_keeps_files_inside_synthetic_home(tmp_path: Path) -> None:
     case = render_case(ROOT, FIRST_OBJECTIVE, FIRST_TECHNIQUE)
     workspace = tmp_path / "workspace"

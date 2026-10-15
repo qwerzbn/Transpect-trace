@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import re
 import time
 from typing import Literal
 
@@ -156,21 +155,8 @@ class PolicyEngine:
                 if uninspectable(value.get("input")):
                     raise ValueError("binary or referenced attachment not inspected by v1")
                 text = "\n".join(strings(value))
-                for marker in self.policy.content_markers:
-                    if marker.source_path not in self.policy.allowed_source_paths and marker.value in text:
-                        hits.append(marker.marker_id); sources.add(marker.source_path)
-                for path, chunk in self.registered:
-                    if chunk in text:
-                        hits.append("REGISTERED_CONTENT"); sources.add(path)
-                if self.policy.credential_rules:
-                    if re.search(r"-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----", text):
-                        hits.append("PRIVATE_KEY_BLOCK")
-                    for match in re.finditer(r"(?im)\b(?:password|passwd|mysql_password|api_secret|private_key)\s*[:=]\s*[\"']?([^\s\"']{8,})", text):
-                        secret = match.group(1).rstrip(",;")
-                        if not secret.startswith(("${", "<", "TRANSPECT_PUBLIC")) and secret.lower() not in {"changeme", "your_password", "example_password", "********"}:
-                            hits.append("CONFIG_CREDENTIAL")
-                    if re.search(r"\bAKIA[A-Z0-9]{16}\b", text) and re.search(r"(?im)aws_secret_access_key\s*[:=]\s*[\"']?[A-Za-z0-9/+]{40}\b", text):
-                        hits.append("AWS_CREDENTIAL_PAIR")
+                from .detection import detect_text
+                hits,sources=detect_text(text,self.policy,self.registered)
                 if self.policy.allowed_upstreams:
                     from urllib.parse import urlsplit
                     host = urlsplit(request.destination).hostname if request.destination else None

@@ -41,7 +41,13 @@ def _load_module(name: str, path: Path):
         raise RuntimeError(f"cannot import official InjecAgent module: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except ModuleNotFoundError as error:
+        sys.modules.pop(name, None)
+        if error.name == "nltk":
+            raise RuntimeError("Official InjecAgent evaluation requires: uv sync --extra benchmarks") from error
+        raise
     return module
 
 

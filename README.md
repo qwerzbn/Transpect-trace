@@ -7,11 +7,13 @@ Transpect Trace Core captures reproducible evidence from real LLM agent clients.
 - Linux process, file, and network activity from `strace` plus in-process libc observations from Frida Gadget;
 - run configuration, versions, collector status, checksums, and quality metrics.
 
-The policy mode is intentionally deterministic: configured markers map request content to known fixture source files, and configured upstream hosts form an allowlist. General sensitive-data classification, risk scoring, dashboards, encoded-content detection, and byte-level taint tracking remain outside this repository.
+The tracing Gateway uses deterministic marker and upstream policies. The separate Windows Guard and Observe modules also detect configured credentials and registered text; Observe produces risk recommendations. Semantic classification, OCR, general file decoding and byte-level taint tracking remain outside the verified scope.
 
 ## Install
 
-Python 3.12 and Docker Desktop with Linux containers are required.
+Windows multi-channel visibility is available separately through `ttrace observe inventory/run/report`. It uses pinned eCapture Windows research and passive Native adapters, with redacted evidence and risk recommendations. Verified paths and unsupported Chrome/IDE UI coverage are documented in [Windows Observe](docs/windows-observe.md); it does not add enforcement to unverified clients.
+
+Python 3.12 is selected by `.python-version`. Docker Desktop with Linux containers is required for the container tracing commands; Windows Guard and Observe run on the host.
 
 The separate [Windows fixed-version Codex request gate](docs/codex-guard.md) uses native runtime instrumentation and a language-neutral local policy protocol, without a model traffic proxy or TLS replacement. It does not require Docker. HTTP JSON and selected WSS messages have synthetic-origin validation; full streaming, uploads, daemon mode and whole-system protection are not claimed. Live ETW validation currently requires privileges unavailable in the recorded session.
 
@@ -19,9 +21,25 @@ The project uses `uv` for Python, virtual environment, dependency, and lockfile 
 
 ```powershell
 cd D:\code\transpect-trace
-uv sync --all-extras --dev
-uv run ttrace doctor
+uv sync --locked --dev
+uv run --locked pytest
 ```
+
+Install only the optional capability you use:
+
+| Capability | Sync command |
+|---|---|
+| Runtime only | `uv sync --locked --no-dev` |
+| Windows observation and native build tools | `uv sync --locked --extra observe --extra native-build --dev` |
+| Frida research and TUI experiments | `uv sync --locked --extra guard-probe --dev` |
+| Parquet export | `uv sync --locked --extra export` |
+| Historical proxy experiments | `uv sync --locked --extra mitm` |
+| Word report generation | `uv sync --locked --extra reports` |
+| Official InjecAgent evaluator | `uv sync --locked --extra benchmarks` |
+
+`pyproject.toml` declares dependencies and `uv.lock` fixes their resolved versions. Use `uv lock` after intentional dependency changes, then `uv lock --check` and `uv pip check` to verify them. Container Python dependencies also use `uv sync --locked --no-dev`; Dockerfiles no longer keep separate pip dependency lists. Go, Node/npm, Docker, Windows SDK/system APIs and pinned native sources are managed separately from Python. See the [review and cleanup record](docs/review-and-cleanup-2026-10-15.md).
+
+The optional LivePI tests require the pinned `.external/LivePI` checkout and skip when it is absent. Generated report-render caches and the unpacked Frida Gadget stay local and ignored; Docker extracts the checked `.so.xz` source instead.
 
 Put provider settings in the checkout-local `.env`. It is ignored by Git and Docker. Existing generic names are supported:
 

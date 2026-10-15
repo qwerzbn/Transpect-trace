@@ -1,0 +1,141 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.capture/1.0",
+      "default": "transpect.observe.capture/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "provider": {
+      "enum": [
+        "native-observer",
+        "ecapture-windows",
+        "fixture"
+      ],
+      "title": "Provider",
+      "type": "string"
+    },
+    "capture_point": {
+      "enum": [
+        "tls",
+        "http-body",
+        "wss-message"
+      ],
+      "title": "Capture Point",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 0,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "creation_filetime": {
+      "exclusiveMinimum": 0,
+      "title": "Creation Filetime",
+      "type": "integer"
+    },
+    "tid": {
+      "minimum": 0,
+      "title": "Tid",
+      "type": "integer"
+    },
+    "connection_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Connection Id",
+      "type": "string"
+    },
+    "direction": {
+      "enum": [
+        "send",
+        "recv"
+      ],
+      "title": "Direction",
+      "type": "string"
+    },
+    "sequence": {
+      "exclusiveMinimum": 0,
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "captured_qpc": {
+      "minimum": 0,
+      "title": "Captured Qpc",
+      "type": "integer"
+    },
+    "qpc_frequency": {
+      "exclusiveMinimum": 0,
+      "title": "Qpc Frequency",
+      "type": "integer"
+    },
+    "data_b64": {
+      "default": "",
+      "title": "Data B64",
+      "type": "string"
+    },
+    "truncated": {
+      "default": false,
+      "title": "Truncated",
+      "type": "boolean"
+    },
+    "lost_events": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Lost Events",
+      "type": "integer"
+    },
+    "connection_identity": {
+      "default": "stable",
+      "enum": [
+        "stable",
+        "unknown"
+      ],
+      "title": "Connection Identity",
+      "type": "string"
+    },
+    "event": {
+      "default": "data",
+      "enum": [
+        "data",
+        "closed",
+        "ready",
+        "gap"
+      ],
+      "title": "Event",
+      "type": "string"
+    },
+    "application": {
+      "default": "unknown",
+      "title": "Application",
+      "type": "string"
+    },
+    "image_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Image Sha256"
+    }
+  },
+  "required": [
+    "provider",
+    "capture_point",
+    "pid",
+    "creation_filetime",
+    "tid",
+    "connection_id",
+    "direction",
+    "sequence",
+    "captured_qpc",
+    "qpc_frequency"
+  ],
+  "title": "CaptureEvent",
+  "type": "object"
+}

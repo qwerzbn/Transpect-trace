@@ -65,7 +65,7 @@ def export_parquet(run_dir: Path | str) -> Path:
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError as error:
-        raise RuntimeError("Parquet export requires: pip install 'transpect-trace[export]'") from error
+        raise RuntimeError("Parquet export requires: uv sync --extra export") from error
     root = Path(run_dir).resolve()
     events_path = root / "normalized/events.jsonl"
     if not events_path.is_file():

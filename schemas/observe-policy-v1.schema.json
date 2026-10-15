@@ -1,0 +1,129 @@
+{
+  "$defs": {
+    "GuardPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "default": "transpect.guard.policy/1.0",
+          "title": "Schema",
+          "type": "string"
+        },
+        "policy_id": {
+          "default": "local-guard",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "version": {
+          "default": "1",
+          "title": "Version",
+          "type": "string"
+        },
+        "deny_action": {
+          "default": "block_request",
+          "enum": [
+            "block_request",
+            "block_session",
+            "terminate_process"
+          ],
+          "title": "Deny Action",
+          "type": "string"
+        },
+        "content_markers": {
+          "items": {
+            "$ref": "#/$defs/Marker"
+          },
+          "title": "Content Markers",
+          "type": "array"
+        },
+        "allowed_source_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Source Paths",
+          "type": "array"
+        },
+        "allowed_upstreams": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Upstreams",
+          "type": "array"
+        },
+        "registered_files": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "title": "Registered Files",
+          "type": "array"
+        },
+        "credential_rules": {
+          "default": true,
+          "title": "Credential Rules",
+          "type": "boolean"
+        }
+      },
+      "title": "GuardPolicy",
+      "type": "object"
+    },
+    "Marker": {
+      "properties": {
+        "marker_id": {
+          "title": "Marker Id",
+          "type": "string"
+        },
+        "value": {
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "classification": {
+          "default": "sensitive",
+          "title": "Classification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "marker_id",
+        "value",
+        "source_path"
+      ],
+      "title": "Marker",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.policy/1.0",
+      "default": "transpect.observe.policy/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "content_policy": {
+      "$ref": "#/$defs/GuardPolicy"
+    },
+    "warning_keywords": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 50,
+      "title": "Warning Keywords",
+      "type": "array"
+    },
+    "allowed_application_hashes": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Allowed Application Hashes",
+      "type": "array"
+    }
+  },
+  "title": "ObservationPolicy",
+  "type": "object"
+}

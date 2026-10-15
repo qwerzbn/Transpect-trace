@@ -11,3 +11,5 @@ dist/
 build/
 runs/
 *.pyc
+/reports/qa_render*/
+/deploy/frida/*.so

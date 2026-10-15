@@ -49,7 +49,7 @@ class MalformedReplyServer(PipeServer):
         return struct.pack("<I",len(raw))+raw
 
 
-def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_language:str="reference",fault:str="none",scenario:str="prompt",launcher:bool=False):
+def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_language:str="reference",fault:str="none",scenario:str="prompt",launcher:bool=False,coexist:bool=False):
     root.mkdir(parents=True,exist_ok=False)
     home,workspace=root/"codex-home",root/"workspace";home.mkdir();workspace.mkdir()
     marker=f"TRANSPECT_NATIVE_PROBE_{uuid4().hex}"
@@ -118,10 +118,20 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
             engine_type=SlowEngine if fault=="timeout" else PolicyEngine
             server=server_type(client.pid,engine_type(policy),root/"audit.jsonl")
         cleanup=False
+        observer_conflict_refused=None
         try:
             if not launcher:
                 server.start();identity=inject(client.pid,dll,launched_cli=True)
                 if not server.ready.wait(15):raise RuntimeError(f"Native hooks not ready: {server.errors}")
+                if coexist:
+                    from transpect_trace.observe.windows import discover_profile
+                    from transpect_trace.observe.native import NativeCollector
+                    from transpect_trace.observe.pipeline import Pipeline
+                    subject,profile=discover_profile(client.pid,'codex-cli')
+                    observer=NativeCollector(subject,profile,Path('build/observe/ttrace-observe.dll'),Pipeline(root/'observer',policy))
+                    try:observer.start();observer_conflict_refused=False
+                    except RuntimeError:observer_conflict_refused=True
+                    finally:observer.close()
                 if fault=="disconnect":server.close()
             client.stdin.close()
             try:code=client.wait(timeout=35)
@@ -158,6 +168,7 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
             "pid":actual_pid,"returncode":code,"native_ready":server.ready.is_set(),
             "via_public_launcher":launcher,"manager_state":managed_state,
             "module_base":module_base,
+            "observer_conflict_refused":observer_conflict_refused,
             "binary_sha256_before":BINARY_SHA256,"binary_sha256_after":current,
             "disk_unchanged":current==BINARY_SHA256,"proxy_used":False,"tls_replaced":False,
             "synthetic_only":True,"fixture_cleanup_terminated_child":cleanup,
@@ -181,8 +192,10 @@ def main():
     parser.add_argument("--scenario",choices=["prompt","tool_read"],default="prompt")
     parser.add_argument("--launcher",action="store_true",help="Exercise public ttrace guard codex entry point.")
     parser.add_argument("--copy-baseline",action="store_true",help="Run byte-identical EXE copy to exercise independent image layout.")
+    parser.add_argument("--coexist-observer",action="store_true",help="Verify observer refuses an already guarded semantic entry.")
     args=parser.parse_args()
     if args.launcher and args.fault!="none":parser.error("fault injection uses the direct research fixture")
+    if args.launcher and args.coexist_observer:parser.error('coexistence uses direct injection fixture')
     if hashlib.sha256(args.codex.read_bytes()).hexdigest()!=BINARY_SHA256:parser.error("baseline mismatch")
     root=args.output.resolve();root.mkdir(parents=True,exist_ok=False)
     binary=args.codex
@@ -190,7 +203,7 @@ def main():
         folder=root/"official-copy";folder.mkdir()
         binary=folder/"codex.exe";shutil.copyfile(args.codex,binary)
         if hashlib.sha256(binary.read_bytes()).hexdigest()!=BINARY_SHA256:raise RuntimeError("copy integrity failure")
-    results=[experiment(binary,args.dll,root/t,t,args.action,args.engine,args.fault,args.scenario,args.launcher) for t in ["http","wss"]]
+    results=[experiment(binary,args.dll,root/t,t,args.action,args.engine,args.fault,args.scenario,args.launcher,args.coexist_observer) for t in ["http","wss"]]
     (root/"summary.json").write_text(json.dumps({"experiments":results},indent=2)+"\n")
     print(json.dumps({"output":str(root),"results":[{k:v for k,v in r.items() if k not in {"policy_events","origin_connections","manager_state"}} for r in results]},indent=2))
     for result in results:

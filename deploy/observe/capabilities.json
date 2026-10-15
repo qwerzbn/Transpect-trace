@@ -1,0 +1,27 @@
+{
+  "schema_version": "transpect.observe.capabilities/1.0",
+  "can_enforce": false,
+  "platform": "windows-x64",
+  "ecapture": {
+    "repository": "https://github.com/gojue/ecapture-windows",
+    "commit": "7fb8347b7a3c28d2a094e35af38b1c471d194ebf",
+    "actual_transport": "loopback TCP with shared port file",
+    "connection_identity": "unavailable",
+    "text_preview_bytes": 120,
+    "full_payload_certified": false
+  },
+  "native_observer": {
+    "openssl": ["SSL_write", "SSL_write_ex", "SSL_read", "SSL_read_ex", "SSL_free"],
+    "schannel": ["EncryptMessage", "DecryptMessage", "DeleteSecurityContext"],
+    "semantic_images": [
+      "d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec",
+      "f5521b058ca08e249afd3b25b4681e81100181d92e73aa6b94bb8e75c2aa487b"
+    ],
+    "frame_limit_bytes": 65536,
+    "queue_limit_bytes": 8388608,
+    "reassembled_body_limit_bytes": 16777216,
+    "aggregate_reassembly_limit_bytes": 67108864,
+    "production_ready": false
+  },
+  "unsupported": ["Chrome BoringSSL entry not verified", "full VS Code UI channel certification", "QUIC", "WebSocket extensions", "file-upload gating", "OCR", "whole-system bypass prevention"]
+}

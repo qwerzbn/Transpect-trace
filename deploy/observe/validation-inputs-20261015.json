@@ -1,0 +1,29 @@
+{
+  "visibility": [
+    {"target":"python-http1", "scope":"OpenSSL isolated fake-data source, gzip and split writes", "directory":"runs/observe-probes/release-http-09"},
+    {"target":"python-h2", "scope":"OpenSSL isolated ALPN h2 source, multiplexed streams, public CLI; post-review pipe shutdown fix", "directory":"runs/observe-probes/review-h2-16", "require_alpn":"h2"},
+    {"target":"python-wss", "scope":"OpenSSL isolated fake-data source, masked text fragmentation", "directory":"runs/observe-probes/release-wss-11"},
+    {"target":"schannel", "scope":"WinHTTP fixture, Native supplement; not eCapture certification", "directory":"runs/observe-probes/review-schannel-17"},
+    {"target":"extension-backend-http", "scope":"Real extension bundled app-server backend, isolated source; no full VS Code UI", "directory":"runs/observe-backend/release-http-04"},
+    {"target":"extension-backend-wss", "scope":"Real extension bundled app-server backend, isolated source; no full VS Code UI", "directory":"runs/observe-backend/release-wss-05"}
+  ],
+  "guard": [
+    "runs/guard-native/observe-regression-19",
+    "runs/guard-native/observe-coexist-deny-28",
+    "runs/guard-native/observe-terminate-21",
+    "runs/guard-native/observe-timeout-22",
+    "runs/guard-native/observe-allow-23",
+    "runs/guard-native/observe-disconnect-24",
+    "runs/guard-native/observe-stale-25",
+    "runs/guard-native/observe-malformed-26",
+    "runs/guard-tui/observe-session-http-19",
+    "runs/guard-tui/observe-session-wss-20",
+    "runs/guard-tui/final-http-request-12",
+    "runs/guard-tui/public-wss-request-15"
+  ],
+  "limitations": [
+    {"target":"chrome-web", "summary":"runs/observe-chrome/isolated-01/summary.json", "reason":"Origin receipt verified, but no stable BoringSSL capture entry; real ChatGPT Web not certified."},
+    {"target":"vscode-codex-ui", "summary":"runs/observe-backend/release-wss-05/summary.json", "reason":"Bundled backend tested independently; full VS Code extension UI and real AI channel not certified."},
+    {"target":"ecapture-windows", "summary":"runs/ecapture-probes/windows-01/summary.json", "reason":"Runtime denied for lack of elevation; upstream preview/connection identity also insufficient for complete bodies."}
+  ]
+}

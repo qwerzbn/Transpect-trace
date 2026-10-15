@@ -3,10 +3,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from transpect_trace.clients.injecagent_mcp import InjecAgentMCP
 from transpect_trace.core.models import Manifest
 from transpect_trace.core.storage import TraceBundle
 from transpect_trace.normalization import normalize_run
+
+
+def test_official_evaluator_declares_its_dynamic_dependency(tmp_path,monkeypatch):
+    import runpy
+    import sys
+    namespace=runpy.run_path(str(Path(__file__).resolve().parents[1]/"scripts/run_injecagent_subset.py"))
+    module=tmp_path/"official.py";module.write_text("from nltk import ngrams\n")
+    monkeypatch.setitem(sys.modules,"nltk",None)
+    with pytest.raises(RuntimeError,match="uv sync --extra benchmarks"):
+        namespace['_load_module']('injecagent_test_missing_dependency',module)
+    assert 'injecagent_test_missing_dependency' not in sys.modules
 
 
 def _case_file(tmp_path: Path) -> Path:

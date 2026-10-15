@@ -1,0 +1,73 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.profile/1.0",
+      "default": "transpect.observe.profile/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "image_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Image Sha256",
+      "type": "string"
+    },
+    "application": {
+      "title": "Application",
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "openssl",
+        "schannel",
+        "codex-json"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "module_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Module Path"
+    },
+    "module_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Module Sha256"
+    },
+    "rvas": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Rvas",
+      "type": "object"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "image_sha256",
+    "application",
+    "mode"
+  ],
+  "title": "Profile",
+  "type": "object"
+}

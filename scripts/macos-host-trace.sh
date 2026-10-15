@@ -17,7 +17,7 @@ if ! command -v codex >/dev/null 2>&1; then
 fi
 codex --version
 
-uv sync
-run_dir="$(uv run ttrace host-codex --runs-dir runs/host "$@" | tail -n 1)"
-uv run ttrace verify "$run_dir"
+uv sync --locked --no-dev
+run_dir="$(uv run --locked --no-dev ttrace host-codex --runs-dir runs/host "$@" | tail -n 1)"
+uv run --locked --no-dev ttrace verify "$run_dir"
 echo "$run_dir"
