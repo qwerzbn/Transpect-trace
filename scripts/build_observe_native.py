@@ -1,14 +1,19 @@
 """Build passive observer; preserves the separate enforcement DLL."""
-import hashlib,json,subprocess,sys
+import argparse,hashlib,json,subprocess,sys
 from pathlib import Path
+from _build_support import ROOT, enter_repository
 
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',type=Path,default=ROOT/'build/observe')
+    args=parser.parse_args();output=args.output.resolve()
+    enter_repository()
     root=Path('native/guard/third_party/minhook')
     manifest=json.loads((root/'source-manifest.json').read_text())
     for name,want in manifest['sha256'].items():
         if hashlib.sha256((root/name).read_bytes()).hexdigest()!=want:raise RuntimeError('Vendor checksum mismatch')
-    output=Path('build/observe');output.mkdir(parents=True,exist_ok=True)
+    output.mkdir(parents=True,exist_ok=True)
     sources=[Path('native/observe/observer.c'),*[root/'src'/p for p in ['buffer.c','hook.c','trampoline.c','hde/hde64.c']]]
     subprocess.run([sys.executable,'-m','ziglang','cc','-target','x86_64-windows-gnu','-O2','-shared',
                     *map(str,sources),'-lsecur32','-o',str(output/'ttrace-observe.dll')],check=True)

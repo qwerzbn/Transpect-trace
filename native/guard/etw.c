@@ -24,6 +24,11 @@ static wchar_t session[128];
 static unsigned long long sequence;
 static unsigned long decode_errors;
 static int metadata_property(const wchar_t *name) {
+#ifdef TTRACE_BEHAVIOR_ETW
+    /* Kernel-File Create uses OpenPath. Only the independent behavior build
+     * enables this additional metadata field; fixed Guard builds are unchanged. */
+    if(!_wcsicmp(name,L"OpenPath")||!_wcsicmp(name,L"IssuingThreadId"))return 1;
+#endif
     const wchar_t *allowed[]={L"ProcessID",L"ProcessId",L"ParentProcessID",L"ParentProcessId",
         L"ThreadID",L"ThreadId",L"TTID",L"CreateTime",L"FileObject",L"FileKey",L"FileName",
         L"FilePath",L"IoSize",L"ByteOffset",L"saddr",L"daddr",L"sport",L"dport",L"size",
@@ -71,6 +76,17 @@ static void WINAPI event(PEVENT_RECORD record) {
         if(TdhGetPropertySize(record,0,NULL,1,&property,&n)!=ERROR_SUCCESS||n>65536)continue;
         BYTE *data=malloc(n?n:1);
         if(!data||TdhGetProperty(record,0,NULL,1,&property,n,data)!=ERROR_SUCCESS){free(data);continue;}
+#ifdef TTRACE_BEHAVIOR_ETW
+        /* TDH InType 1 is a UTF-16 null-terminated string. TdhGetProperty already
+         * returns its bytes. Passing byte length as TdhFormatProperty's string
+         * length can drop these fields; bound and terminate the returned bytes. */
+        if(item->nonStructType.InType==1 && n%sizeof(wchar_t)==0) {
+            wchar_t *value=calloc(1,n+sizeof(wchar_t));
+            if(value){memcpy(value,data,n);if(!first)putchar(',');first=0;quote(name);putchar(':');quote(value);free(value);}
+            else decode_errors++;
+            free(data);continue;
+        }
+#endif
         if(!_wcsicmp(name,L"CreateTime") && n==8) {
             unsigned long long created;memcpy(&created,data,8);
             if(!first)putchar(',');first=0;quote(name);printf(":\"%llu\"",created);

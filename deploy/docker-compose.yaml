@@ -1,9 +1,0 @@
-services:
-  # Documentation-only baseline. `ttrace run` creates per-run networks and
-  # containers dynamically so concurrent traces cannot share evidence.
-  otel:
-    image: otel/opentelemetry-collector-contrib:0.114.0
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
-    volumes:
-      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
-

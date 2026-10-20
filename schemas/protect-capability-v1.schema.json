@@ -1,0 +1,103 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.capability/1.0",
+      "default": "transpect.protect.capability/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "adapter_id": {
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "channel": {
+      "enum": [
+        "cli",
+        "ide",
+        "api",
+        "web"
+      ],
+      "title": "Channel",
+      "type": "string"
+    },
+    "image_sha256": {
+      "title": "Image Sha256",
+      "type": "string"
+    },
+    "module_sha256": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Module Sha256",
+      "type": "object"
+    },
+    "entry": {
+      "title": "Entry",
+      "type": "string"
+    },
+    "protocols": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Protocols",
+      "type": "array"
+    },
+    "capture_stage": {
+      "title": "Capture Stage",
+      "type": "string"
+    },
+    "content_scope": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Content Scope",
+      "type": "array"
+    },
+    "verified_actions": {
+      "items": {
+        "enum": [
+          "block_request",
+          "block_session",
+          "terminate_process"
+        ],
+        "type": "string"
+      },
+      "title": "Verified Actions",
+      "type": "array"
+    },
+    "certification": {
+      "default": "unverified",
+      "enum": [
+        "unverified",
+        "controlled_origin",
+        "real_client"
+      ],
+      "title": "Certification",
+      "type": "string"
+    },
+    "can_enforce": {
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "adapter_id",
+    "channel",
+    "image_sha256",
+    "entry",
+    "protocols",
+    "capture_stage",
+    "content_scope"
+  ],
+  "title": "AdapterCapability",
+  "type": "object"
+}

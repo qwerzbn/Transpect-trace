@@ -1,0 +1,226 @@
+{
+  "$defs": {
+    "ProcessIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "exclusiveMinimum": 0,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "creation_filetime": {
+          "exclusiveMinimum": 0,
+          "title": "Creation Filetime",
+          "type": "integer"
+        },
+        "image_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Sha256"
+        },
+        "image_name": {
+          "anyOf": [
+            {
+              "maxLength": 260,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Name"
+        }
+      },
+      "required": [
+        "pid",
+        "creation_filetime"
+      ],
+      "title": "ProcessIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Metadata only; no command line, payload or arbitrary ETW properties.",
+  "properties": {
+    "schema_version": {
+      "const": "transpect.codex.behavior/1.0",
+      "default": "transpect.codex.behavior/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "process.snapshot",
+        "process.start",
+        "process.exit",
+        "file.access",
+        "file.read",
+        "file.write",
+        "network.activity"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "subject": {
+      "$ref": "#/$defs/ProcessIdentity"
+    },
+    "parent_identity": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Identity"
+    },
+    "timestamp_qpc": {
+      "minimum": 0,
+      "title": "Timestamp Qpc",
+      "type": "integer"
+    },
+    "evidence_method": {
+      "title": "Evidence Method",
+      "type": "string"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider"
+    },
+    "opcode": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Opcode"
+    },
+    "path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Path"
+    },
+    "destination_address": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Destination Address"
+    },
+    "destination_port": {
+      "anyOf": [
+        {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Destination Port"
+    },
+    "protocol": {
+      "default": "unknown",
+      "enum": [
+        "tcp",
+        "udp",
+        "unknown"
+      ],
+      "title": "Protocol",
+      "type": "string"
+    },
+    "reported_size": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reported Size"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "read_success": {
+      "const": "unknown",
+      "default": "unknown",
+      "title": "Read Success",
+      "type": "string"
+    },
+    "payload_sent": {
+      "const": "unknown",
+      "default": "unknown",
+      "title": "Payload Sent",
+      "type": "string"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id",
+    "event_id",
+    "kind",
+    "subject",
+    "timestamp_qpc",
+    "evidence_method"
+  ],
+  "title": "BehaviorEvent",
+  "type": "object"
+}

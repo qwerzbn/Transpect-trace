@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "default": "protect/1",
+      "title": "Version",
+      "type": "string"
+    },
+    "allowed_hosts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Hosts",
+      "type": "array"
+    },
+    "review_rules": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Review Rules",
+      "type": "array"
+    },
+    "deny_action": {
+      "default": "block_request",
+      "title": "Deny Action",
+      "type": "string"
+    }
+  },
+  "title": "ProtectionPolicy",
+  "type": "object"
+}

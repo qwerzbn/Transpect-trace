@@ -1,2 +1,0 @@
-The AgentOS project records file reads, model requests, and tool inputs so that each task can be reviewed using execution evidence.
-The next milestone is to connect ordinary user prompts to automatic generation of an Agent call tree and an operating-system process tree.

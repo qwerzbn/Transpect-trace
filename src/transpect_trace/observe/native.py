@@ -91,13 +91,7 @@ class NativeCollector:
                 payload=self.read(handle,length)
                 complete=True
                 if kind==1:self.ready.set();continue
-                point="http-body" if kind==16 else "wss-message" if kind==32 else "tls"
-                event=CaptureEvent(provider="native-observer",capture_point=point,pid=pid,tid=tid,
-                    creation_filetime=self.subject["creation_filetime"],connection_id=f"{low:x}:{high:x}:{epoch}",
-                    direction="recv" if direction else "send",sequence=seq,captured_qpc=qpc,qpc_frequency=self.frequency,
-                    data_b64=base64.b64encode(payload).decode(),truncated=bool(flags&256),lost_events=flags>>16,
-                    event="closed" if kind==2 else "data",application=self.profile.application,image_sha256=self.subject['image_sha256'])
-                self.pipeline.consume(event)
+                self.consume_frame(kind,pid,tid,direction,seq,low,high,epoch,qpc,flags,payload)
             except Exception as error:
                 # Never copy arbitrary parse errors / plaintext into diagnostics.
                 self.errors.append(type(error).__name__)
@@ -109,6 +103,16 @@ class NativeCollector:
                     try:self.finish_frame(handle)
                     except Exception:self.errors.append('capture_close_unconfirmed')
                 self.k.DisconnectNamedPipe(handle);self.k.CloseHandle(handle)
+
+    def consume_frame(self,kind,pid,tid,direction,seq,low,high,epoch,qpc,flags,payload):
+        if kind not in {0,2,16,32}:raise ValueError('unsupported legacy observer event kind')
+        point="http-body" if kind==16 else "wss-message" if kind==32 else "tls"
+        event=CaptureEvent(provider="native-observer",capture_point=point,pid=pid,tid=tid,
+            creation_filetime=self.subject["creation_filetime"],connection_id=f"{low:x}:{high:x}:{epoch}",
+            direction="recv" if direction else "send",sequence=seq,captured_qpc=qpc,qpc_frequency=self.frequency,
+            data_b64=base64.b64encode(payload).decode(),truncated=bool(flags&256),lost_events=flags>>16,
+            event="closed" if kind==2 else "data",application=self.profile.application,image_sha256=self.subject['image_sha256'])
+        self.pipeline.consume(event)
 
     def check_health(self):
         if self.errors or not self.thread or not self.thread.is_alive():

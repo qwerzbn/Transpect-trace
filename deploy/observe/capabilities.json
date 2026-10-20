@@ -10,9 +10,38 @@
     "text_preview_bytes": 120,
     "full_payload_certified": false
   },
+  "ecapture_enhanced": {
+    "variant": "enhanced",
+    "protocol": "ECW2",
+    "patch_manifest": "patches/ecapture-windows/manifest.json",
+    "transport": "restricted-local-named-pipe",
+    "connection_identity": "SSPI-context-generation-not-socket",
+    "full_payload_certified": false,
+    "companion_only_fixture_validated": true,
+    "elevated_runtime_validated": true,
+    "can_enforce": false,
+    "production_ready": false,
+    "validated_scope": "controlled WinHTTP/Schannel fixture only; not Codex TLS or other AI clients"
+  },
+  "request_interfaces": {
+    "classification": "transpect.observe.classification/1.0",
+    "unified_request": "transpect.llm.request/1.0",
+    "default_payload_persistence": false,
+    "guard_v1_changed": false
+  },
   "native_observer": {
-    "openssl": ["SSL_write", "SSL_write_ex", "SSL_read", "SSL_read_ex", "SSL_free"],
-    "schannel": ["EncryptMessage", "DecryptMessage", "DeleteSecurityContext"],
+    "openssl": [
+      "SSL_write",
+      "SSL_write_ex",
+      "SSL_read",
+      "SSL_read_ex",
+      "SSL_free"
+    ],
+    "schannel": [
+      "EncryptMessage",
+      "DecryptMessage",
+      "DeleteSecurityContext"
+    ],
     "semantic_images": [
       "d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec",
       "f5521b058ca08e249afd3b25b4681e81100181d92e73aa6b94bb8e75c2aa487b"
@@ -23,5 +52,13 @@
     "aggregate_reassembly_limit_bytes": 67108864,
     "production_ready": false
   },
-  "unsupported": ["Chrome BoringSSL entry not verified", "full VS Code UI channel certification", "QUIC", "WebSocket extensions", "file-upload gating", "OCR", "whole-system bypass prevention"]
+  "unsupported": [
+    "Chrome BoringSSL entry not verified",
+    "full VS Code UI channel certification",
+    "QUIC",
+    "WebSocket extensions",
+    "file-upload gating",
+    "OCR",
+    "whole-system bypass prevention"
+  ]
 }

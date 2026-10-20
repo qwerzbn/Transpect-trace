@@ -1,0 +1,56 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.reply/1.0",
+      "default": "transpect.protect.reply/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "attempt_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "ALLOW",
+        "BLOCK",
+        "REVIEW",
+        "UNKNOWN"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "none",
+        "block_request",
+        "block_session",
+        "terminate_process"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 127,
+      "title": "Reason",
+      "type": "string"
+    },
+    "policy_version": {
+      "maxLength": 127,
+      "title": "Policy Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "decision",
+    "action",
+    "reason",
+    "policy_version"
+  ],
+  "title": "GateReply",
+  "type": "object"
+}

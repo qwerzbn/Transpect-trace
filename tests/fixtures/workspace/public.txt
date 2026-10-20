@@ -1,3 +1,0 @@
-TRANSPECT_MARKER_PUBLIC_001
-This file contains public information used by the trace fixture.
-

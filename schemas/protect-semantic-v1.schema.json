@@ -1,0 +1,234 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.semantic/1.0",
+      "default": "transpect.protect.semantic/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "adapter_id": {
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "application": {
+      "title": "Application",
+      "type": "string"
+    },
+    "channel": {
+      "enum": [
+        "cli",
+        "ide",
+        "api",
+        "web"
+      ],
+      "title": "Channel",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 0,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "creation_filetime": {
+      "exclusiveMinimum": 0,
+      "title": "Creation Filetime",
+      "type": "integer"
+    },
+    "image_sha256": {
+      "title": "Image Sha256",
+      "type": "string"
+    },
+    "connection_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Connection Id"
+    },
+    "connection_identity": {
+      "default": "unknown",
+      "enum": [
+        "stable",
+        "unknown"
+      ],
+      "title": "Connection Identity",
+      "type": "string"
+    },
+    "stream_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stream Id"
+    },
+    "captured_qpc": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Captured Qpc"
+    },
+    "qpc_frequency": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Qpc Frequency"
+    },
+    "protocol": {
+      "title": "Protocol",
+      "type": "string"
+    },
+    "method": {
+      "default": "POST",
+      "title": "Method",
+      "type": "string"
+    },
+    "destination_host": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Destination Host"
+    },
+    "api_path": {
+      "default": "unknown",
+      "enum": [
+        "/responses",
+        "/chat/completions",
+        "unknown"
+      ],
+      "title": "Api Path",
+      "type": "string"
+    },
+    "completeness": {
+      "default": "unknown",
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "encoding_state": {
+      "default": "identity",
+      "enum": [
+        "identity",
+        "decoded",
+        "compressed",
+        "unsupported",
+        "unknown"
+      ],
+      "title": "Encoding State",
+      "type": "string"
+    },
+    "content_encoding": {
+      "default": "identity",
+      "enum": [
+        "identity",
+        "gzip",
+        "deflate",
+        "zstd",
+        "unsupported"
+      ],
+      "title": "Content Encoding",
+      "type": "string"
+    },
+    "capture_stage": {
+      "default": "before_transport",
+      "title": "Capture Stage",
+      "type": "string"
+    },
+    "body_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Body Sha256",
+      "type": "string"
+    },
+    "body_bytes": {
+      "maximum": 16777216,
+      "minimum": 0,
+      "title": "Body Bytes",
+      "type": "integer"
+    },
+    "body": {
+      "default": "",
+      "format": "binary",
+      "title": "Body",
+      "type": "string"
+    },
+    "gate_owner": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gate Owner"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "adapter_id",
+    "application",
+    "channel",
+    "pid",
+    "creation_filetime",
+    "image_sha256",
+    "protocol",
+    "body_sha256",
+    "body_bytes"
+  ],
+  "title": "SemanticCaptureEvent",
+  "type": "object"
+}

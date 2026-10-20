@@ -1,0 +1,335 @@
+{
+  "$defs": {
+    "ContentField": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "message",
+            "context",
+            "tool_call",
+            "tool_result",
+            "attachment_reference",
+            "attachment_inline",
+            "tool_definition",
+            "unknown"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "location": {
+          "title": "Location",
+          "type": "string"
+        },
+        "role": {
+          "default": "unknown",
+          "enum": [
+            "system",
+            "developer",
+            "user",
+            "assistant",
+            "tool",
+            "function",
+            "unknown"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "bytes": {
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "inspected": {
+          "default": true,
+          "title": "Inspected",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "location",
+        "bytes",
+        "sha256"
+      ],
+      "title": "ContentField",
+      "type": "object"
+    },
+    "TrafficClassification": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "transpect.observe.classification/1.0",
+          "default": "transpect.observe.classification/1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "observation_id": {
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "LLM",
+            "NON_LLM",
+            "UNKNOWN"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "rule_version": {
+          "default": "llm-requests/1",
+          "title": "Rule Version",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "observation_id",
+        "category"
+      ],
+      "title": "TrafficClassification",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.llm.request/1.0",
+      "default": "transpect.llm.request/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "capture_source": {
+      "title": "Capture Source",
+      "type": "string"
+    },
+    "application": {
+      "title": "Application",
+      "type": "string"
+    },
+    "channel": {
+      "enum": [
+        "cli",
+        "ide",
+        "api",
+        "web",
+        "unknown"
+      ],
+      "title": "Channel",
+      "type": "string"
+    },
+    "pid": {
+      "title": "Pid",
+      "type": "integer"
+    },
+    "creation_filetime": {
+      "title": "Creation Filetime",
+      "type": "integer"
+    },
+    "image_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Image Sha256"
+    },
+    "connection_id": {
+      "title": "Connection Id",
+      "type": "string"
+    },
+    "stream_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Stream Id"
+    },
+    "transport_protocol": {
+      "enum": [
+        "tls",
+        "unknown"
+      ],
+      "title": "Transport Protocol",
+      "type": "string"
+    },
+    "application_protocol": {
+      "title": "Application Protocol",
+      "type": "string"
+    },
+    "destination": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Destination"
+    },
+    "destination_evidence": {
+      "title": "Destination Evidence",
+      "type": "string"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "encoding_state": {
+      "enum": [
+        "identity",
+        "decoded",
+        "compressed",
+        "encrypted",
+        "unsupported",
+        "unknown"
+      ],
+      "title": "Encoding State",
+      "type": "string"
+    },
+    "parsing_state": {
+      "enum": [
+        "parsed",
+        "failed",
+        "unsupported",
+        "unknown"
+      ],
+      "title": "Parsing State",
+      "type": "string"
+    },
+    "raw_payload_sha256": {
+      "title": "Raw Payload Sha256",
+      "type": "string"
+    },
+    "raw_payload_bytes": {
+      "title": "Raw Payload Bytes",
+      "type": "integer"
+    },
+    "decoded_payload_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Decoded Payload Sha256"
+    },
+    "decoded_payload_bytes": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Decoded Payload Bytes"
+    },
+    "classification": {
+      "$ref": "#/$defs/TrafficClassification"
+    },
+    "fields": {
+      "items": {
+        "$ref": "#/$defs/ContentField"
+      },
+      "title": "Fields",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "capture_point": {
+      "title": "Capture Point",
+      "type": "string"
+    },
+    "send_evidence": {
+      "title": "Send Evidence",
+      "type": "string"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "observation_id",
+    "capture_source",
+    "application",
+    "channel",
+    "pid",
+    "creation_filetime",
+    "image_sha256",
+    "connection_id",
+    "stream_id",
+    "transport_protocol",
+    "application_protocol",
+    "destination",
+    "destination_evidence",
+    "completeness",
+    "encoding_state",
+    "parsing_state",
+    "raw_payload_sha256",
+    "raw_payload_bytes",
+    "decoded_payload_sha256",
+    "decoded_payload_bytes",
+    "classification",
+    "fields",
+    "limitations",
+    "capture_point",
+    "send_evidence"
+  ],
+  "title": "UnifiedLLMRequest",
+  "type": "object"
+}

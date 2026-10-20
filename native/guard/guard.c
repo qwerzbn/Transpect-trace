@@ -14,7 +14,10 @@
 #define DROP_HEADERS_RVA 0x000eeb20
 #define LIMIT (16u * 1024u * 1024u)
 #define DEADLINE_MS 2000
-static const char EXPECTED_HASH[] = "d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec";
+#ifndef TTRACE_EXPECTED_HASH
+#define TTRACE_EXPECTED_HASH "d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec"
+#endif
+static const char EXPECTED_HASH[] = TTRACE_EXPECTED_HASH;
 typedef void *(*HttpFn)(void *, void *, void *, void *);
 typedef void *(*WssFn)(void *, void *);
 typedef void (*DropFn)(void *);

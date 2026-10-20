@@ -1,0 +1,281 @@
+{
+  "$defs": {
+    "SemanticPart": {
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "title": "Location",
+          "type": "string"
+        },
+        "role": {
+          "default": "unknown",
+          "enum": [
+            "system",
+            "developer",
+            "user",
+            "assistant",
+            "tool",
+            "function",
+            "unknown"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "representation": {
+          "enum": [
+            "text",
+            "json",
+            "json_string",
+            "opaque",
+            "attachment"
+          ],
+          "title": "Representation",
+          "type": "string"
+        },
+        "bytes": {
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "inspected": {
+          "title": "Inspected",
+          "type": "boolean"
+        },
+        "call_id_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Call Id Sha256"
+        },
+        "tool_name_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Name Sha256"
+        }
+      },
+      "required": [
+        "location",
+        "representation",
+        "bytes",
+        "sha256",
+        "inspected"
+      ],
+      "title": "SemanticPart",
+      "type": "object"
+    },
+    "ToolLink": {
+      "additionalProperties": false,
+      "properties": {
+        "call_location": {
+          "title": "Call Location",
+          "type": "string"
+        },
+        "result_location": {
+          "title": "Result Location",
+          "type": "string"
+        },
+        "basis": {
+          "const": "unique_call_id_within_request",
+          "default": "unique_call_id_within_request",
+          "title": "Basis",
+          "type": "string"
+        },
+        "proves_execution": {
+          "const": false,
+          "default": false,
+          "title": "Proves Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "call_location",
+        "result_location"
+      ],
+      "title": "ToolLink",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.request-semantics/1.0",
+      "default": "transpect.observe.request-semantics/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "extractor_version": {
+      "default": "request-semantics/1",
+      "title": "Extractor Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "capture_source": {
+      "title": "Capture Source",
+      "type": "string"
+    },
+    "capture_point": {
+      "title": "Capture Point",
+      "type": "string"
+    },
+    "protocol": {
+      "title": "Protocol",
+      "type": "string"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "encoding_state": {
+      "default": "unknown",
+      "enum": [
+        "identity",
+        "decoded",
+        "unsupported",
+        "unknown"
+      ],
+      "title": "Encoding State",
+      "type": "string"
+    },
+    "format": {
+      "default": "unknown",
+      "enum": [
+        "responses",
+        "chat_completions",
+        "wss_response_create",
+        "unknown"
+      ],
+      "title": "Format",
+      "type": "string"
+    },
+    "status": {
+      "default": "unsupported",
+      "enum": [
+        "extracted",
+        "partial",
+        "unsupported",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "raw_body_sha256": {
+      "title": "Raw Body Sha256",
+      "type": "string"
+    },
+    "decoded_body_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decoded Body Sha256"
+    },
+    "prompt": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Prompt",
+      "type": "array"
+    },
+    "context": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Context",
+      "type": "array"
+    },
+    "tool_calls": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Tool Calls",
+      "type": "array"
+    },
+    "tool_results": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Tool Results",
+      "type": "array"
+    },
+    "attachments": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Attachments",
+      "type": "array"
+    },
+    "tool_definitions": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Tool Definitions",
+      "type": "array"
+    },
+    "unknown": {
+      "items": {
+        "$ref": "#/$defs/SemanticPart"
+      },
+      "title": "Unknown",
+      "type": "array"
+    },
+    "tool_links": {
+      "items": {
+        "$ref": "#/$defs/ToolLink"
+      },
+      "title": "Tool Links",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "observation_id",
+    "capture_source",
+    "capture_point",
+    "protocol",
+    "completeness",
+    "raw_body_sha256"
+  ],
+  "title": "RequestSemantics",
+  "type": "object"
+}

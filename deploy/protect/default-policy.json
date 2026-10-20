@@ -1,0 +1,6 @@
+{
+  "version": "protect/1",
+  "allowed_hosts": [],
+  "review_rules": [],
+  "deny_action": "block_request"
+}

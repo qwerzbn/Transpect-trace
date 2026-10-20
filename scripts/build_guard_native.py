@@ -5,12 +5,15 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from _build_support import ROOT, enter_repository
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("build/guard"))
+    parser.add_argument("--output", type=Path, default=ROOT / "build/guard")
     args = parser.parse_args()
+    args.output = args.output.resolve()
+    enter_repository()
     args.output.mkdir(parents=True, exist_ok=True)
     root = Path("native/guard")
     for vendor in ("minhook", "jsmn"):

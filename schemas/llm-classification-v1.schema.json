@@ -1,0 +1,55 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.observe.classification/1.0",
+      "default": "transpect.observe.classification/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "LLM",
+        "NON_LLM",
+        "UNKNOWN"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "rule_version": {
+      "default": "llm-requests/1",
+      "title": "Rule Version",
+      "type": "string"
+    },
+    "evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "observation_id",
+    "category"
+  ],
+  "title": "TrafficClassification",
+  "type": "object"
+}

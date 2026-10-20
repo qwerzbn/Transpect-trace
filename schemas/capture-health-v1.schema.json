@@ -1,0 +1,105 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.capture.health/1.0",
+      "default": "transpect.capture.health/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "provider": {
+      "enum": [
+        "ecapture-windows",
+        "native-observer"
+      ],
+      "title": "Provider",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 0,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "creation_filetime": {
+      "exclusiveMinimum": 0,
+      "title": "Creation Filetime",
+      "type": "integer"
+    },
+    "image_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Image Sha256",
+      "type": "string"
+    },
+    "collector_identity_verified": {
+      "default": false,
+      "title": "Collector Identity Verified",
+      "type": "boolean"
+    },
+    "ready": {
+      "default": false,
+      "title": "Ready",
+      "type": "boolean"
+    },
+    "terminal": {
+      "default": false,
+      "title": "Terminal",
+      "type": "boolean"
+    },
+    "loss": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Loss"
+    },
+    "errors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "gaps": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Gaps",
+      "type": "array"
+    },
+    "failure": {
+      "default": "unknown",
+      "enum": [
+        "none",
+        "permission",
+        "runtime",
+        "tls_backend",
+        "protocol",
+        "boundary",
+        "unknown"
+      ],
+      "title": "Failure",
+      "type": "string"
+    },
+    "observation_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Observation Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "provider",
+    "pid",
+    "creation_filetime",
+    "image_sha256"
+  ],
+  "title": "CaptureHealth",
+  "type": "object"
+}

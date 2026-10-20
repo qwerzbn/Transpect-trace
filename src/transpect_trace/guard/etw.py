@@ -197,6 +197,7 @@ class EtwSession:
         self.process=subprocess.Popen([str(self.executable)],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE,text=True,encoding="utf-8",creationflags=0x200)
         def read():
+            terminal=False
             with self.output.open("a",encoding="utf-8") as out:
                 for line in self.process.stdout:
                     try:
@@ -206,6 +207,13 @@ class EtwSession:
                     out.write(json.dumps(row,ensure_ascii=False)+"\n");out.flush()
                     if row.get("kind")=="etw.ready":self.state.update(state="ready");self.ready.set()
                     if row.get("kind")=="etw.unavailable":self.state.update(state="unavailable",details=row);self.ready.set()
+                    if row.get("kind")=="etw.stopped":
+                        terminal=True
+                        self.state.update(state="degraded" if self.index.dropped_events or row.get("status") else "stopped",
+                                          terminal_observed=True,events_lost=self.index.dropped_events)
+            if not terminal and self.state.get("state")!="unavailable":
+                self.state.update(state="degraded",reason="collector_exit_without_terminal",terminal_observed=False)
+            self.ready.set()
         self.thread=threading.Thread(target=read,daemon=True);self.thread.start()
         if not self.ready.wait(5):self.state.update(state="unavailable",reason="collector_not_ready")
 

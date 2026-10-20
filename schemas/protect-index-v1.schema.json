@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "Registration": {
+      "additionalProperties": false,
+      "properties": {
+        "registration_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Registration Id",
+          "type": "string"
+        },
+        "sensitivity": {
+          "default": "CONFIDENTIAL",
+          "enum": [
+            "PUBLIC",
+            "INTERNAL",
+            "CONFIDENTIAL",
+            "SECRET",
+            "UNKNOWN"
+          ],
+          "title": "Sensitivity",
+          "type": "string"
+        },
+        "data_types": {
+          "items": {
+            "enum": [
+              "credential",
+              "private_key",
+              "source_code",
+              "personal_information",
+              "registered_text"
+            ],
+            "type": "string"
+          },
+          "title": "Data Types",
+          "type": "array"
+        },
+        "chunks": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Chunks",
+          "type": "object"
+        }
+      },
+      "required": [
+        "registration_id",
+        "chunks"
+      ],
+      "title": "Registration",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.content-index/1.0",
+      "default": "transpect.protect.content-index/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 127,
+      "minLength": 1,
+      "title": "Version",
+      "type": "string"
+    },
+    "registrations": {
+      "items": {
+        "$ref": "#/$defs/Registration"
+      },
+      "maxItems": 4096,
+      "title": "Registrations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "title": "ContentIndex",
+  "type": "object"
+}

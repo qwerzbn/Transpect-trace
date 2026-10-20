@@ -1,0 +1,15 @@
+{
+  "schema_version": "transpect.protect.evaluation/1.0",
+  "version": "synthetic/1",
+  "cases": [
+    {"case_id":"normal-zh","text":"请分析这段普通示例代码 function hello() {}","expected_rules":[],"labels":["source_code"]},
+    {"case_id":"credential-basic","text":"password=FakeSyntheticSecret12345","expected_rules":["CONFIG_CREDENTIAL"],"labels":["credential"]},
+    {"case_id":"credential-case-space","text":"MYSQL_PASSWORD : 'FakeSyntheticSecret12345'","expected_rules":["CONFIG_CREDENTIAL"],"labels":["credential"]},
+    {"case_id":"credential-placeholder","text":"password=${PUBLIC_VALUE}","expected_rules":[],"labels":["none"]},
+    {"case_id":"credential-example","text":"password=example_password","expected_rules":[],"labels":["none"]},
+    {"case_id":"weak-email","text":"contact fixture@example.test","expected_rules":["EMAIL_SHAPE"],"labels":["personal_information"]},
+    {"case_id":"weak-ip","text":"connect to 10.0.0.1","expected_rules":["INTERNAL_IP"],"labels":["none"]},
+    {"case_id":"weak-jwt","text":"eyJfixture.payload.signature","expected_rules":["JWT_SHAPE"],"labels":["credential"]},
+    {"case_id":"private-key","text":"-----BEGIN PRIVATE KEY-----\nFAKE_SYNTHETIC_ONLY\n-----END PRIVATE KEY-----","expected_rules":["PRIVATE_KEY_BLOCK"],"labels":["private_key"]}
+  ]
+}

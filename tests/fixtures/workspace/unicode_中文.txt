@@ -1,3 +1,0 @@
-TRANSPECT_MARKER_UNICODE_001
-这是用于验证 UTF-8 采集的假数据。
-

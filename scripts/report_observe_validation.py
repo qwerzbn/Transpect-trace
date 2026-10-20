@@ -108,7 +108,7 @@ def build_report(root, manifest):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest",type=Path,default=Path("deploy/observe/validation-inputs-20261015.json"))
+    parser.add_argument("--manifest",type=Path,required=True,help="Explicit local experiment manifest; raw historical evidence is not distributed.")
     parser.add_argument("--root",type=Path,default=Path.cwd())
     parser.add_argument("--output",type=Path,default=Path("runs/observe-validation/20261015/report.json"))
     args=parser.parse_args()

@@ -1,0 +1,53 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.execution/1.0",
+      "default": "transpect.protect.execution/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "attempt_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 0,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "action": {
+      "enum": [
+        "none",
+        "block_request",
+        "block_session"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "result": {
+      "enum": [
+        "transport_authorized",
+        "native_rejection"
+      ],
+      "title": "Result",
+      "type": "string"
+    },
+    "qpc": {
+      "exclusiveMinimum": 0,
+      "title": "Qpc",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "pid",
+    "action",
+    "result",
+    "qpc"
+  ],
+  "title": "ExecutionEvidence",
+  "type": "object"
+}

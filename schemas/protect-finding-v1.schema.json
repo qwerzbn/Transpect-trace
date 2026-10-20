@@ -1,0 +1,107 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.finding/1.0",
+      "default": "transpect.protect.finding/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "detector_version": {
+      "title": "Detector Version",
+      "type": "string"
+    },
+    "rule_id": {
+      "title": "Rule Id",
+      "type": "string"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "info",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "strength": {
+      "enum": [
+        "weak",
+        "contextual",
+        "exact"
+      ],
+      "title": "Strength",
+      "type": "string"
+    },
+    "sensitivity": {
+      "default": "UNKNOWN",
+      "enum": [
+        "PUBLIC",
+        "INTERNAL",
+        "CONFIDENTIAL",
+        "SECRET",
+        "UNKNOWN"
+      ],
+      "title": "Sensitivity",
+      "type": "string"
+    },
+    "data_types": {
+      "items": {
+        "enum": [
+          "credential",
+          "private_key",
+          "source_code",
+          "personal_information",
+          "registered_text"
+        ],
+        "type": "string"
+      },
+      "title": "Data Types",
+      "type": "array"
+    },
+    "evidence_sha256": {
+      "title": "Evidence Sha256",
+      "type": "string"
+    },
+    "registration_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registration Id"
+    },
+    "index_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Index Version"
+    }
+  },
+  "required": [
+    "detector_version",
+    "rule_id",
+    "location",
+    "severity",
+    "strength",
+    "data_types",
+    "evidence_sha256"
+  ],
+  "title": "DetectionFinding",
+  "type": "object"
+}

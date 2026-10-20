@@ -150,6 +150,7 @@ class Origin:
                                (line.split(":", 1) for line in lines[1:])}
                     if headers.get("upgrade", "").strip() == "websocket":
                         row["protocol"] = "websocket"
+                        row["wss_wire_body_bytes_received"] = len(payload)
                         accept = base64.b64encode(hashlib.sha1((headers["sec-websocket-key"].strip()
                                     + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
                         write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
@@ -157,7 +158,7 @@ class Origin:
                         message = bytearray()
                         def take(n):
                             while len(buffered) < n:
-                                buffered.extend(read())
+                                chunk=read();row["wss_wire_body_bytes_received"]+=len(chunk);buffered.extend(chunk)
                             data = bytes(buffered[:n]); del buffered[:n]
                             return data
                         while True:
@@ -182,9 +183,10 @@ class Origin:
                             write(prefix + data)
                     else:
                         row["protocol"] = "http"
+                        row["http_body_bytes_received"] = len(payload)
                         length = int(headers.get("content-length", 0))
                         while len(payload) < length:
-                            payload += read()
+                            chunk=read();row["http_body_bytes_received"]+=len(chunk);payload += chunk
                         body = b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in self.event_factory(payload))
                         write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
                     row.update(request_line=lines[0], payload_bytes=len(payload),

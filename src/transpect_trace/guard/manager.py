@@ -15,7 +15,7 @@ from .etw import EtwSession
 from .external import ExternalEngine
 
 
-def attach_guard(pid:int,dll:Path,policy_file:Path,run_dir:Path,*,launched_cli=False,engine_command=None):
+def attach_guard(pid:int,dll:Path,policy_file:Path,run_dir:Path,*,launched_cli=False,engine_command=None,engine_factory=None):
     identity=process_identity(pid,launched_cli=launched_cli)
     run_dir.mkdir(parents=True,exist_ok=False)
     if engine_command:
@@ -25,7 +25,7 @@ def attach_guard(pid:int,dll:Path,policy_file:Path,run_dir:Path,*,launched_cli=F
             for key,value in replacements.items():arg=arg.replace(key,value)
             command.append(arg)
         server=ExternalEngine(pid,command,run_dir/"audit.jsonl")
-    else:server=PipeServer(pid,PolicyEngine(GuardPolicy.load(policy_file)),run_dir/"audit.jsonl")
+    else:server=PipeServer(pid,engine_factory(identity) if engine_factory else PolicyEngine(GuardPolicy.load(policy_file)),run_dir/"audit.jsonl")
     state={"schema":"transpect.guard.status/1.0","identity":identity,"state":"initializing",
            "started_at_unix_ns":time.time_ns(),"disk_mutation":False,"runtime":"native",
            "frida_runtime_dependency":False,"wss_streaming_coverage":"not_claimed",
@@ -60,14 +60,14 @@ def suspend(pid):
     finally:k.CloseHandle(handle)
 
 
-def launch(binary:Path,args:list[str],dll:Path,policy:Path,run_dir:Path,engine_command=None):
+def launch(binary:Path,args:list[str],dll:Path,policy:Path,run_dir:Path,engine_command=None,engine_factory=None):
     if not inspect_binary(binary)["supported"]:raise ValueError("fixed baseline mismatch")
     if not args or args[0]!="exec":
         raise ValueError("Native launcher currently validates 'codex exec'; use explicit PID attach for --no-daemon TUI")
     # Hold stdin EOF at the already-tested exec boundary. No account/provider/TLS edits.
     client=subprocess.Popen([str(binary),*args],stdin=subprocess.PIPE)
     try:
-        server,state,status=attach_guard(client.pid,dll,policy,run_dir,launched_cli=True,engine_command=engine_command)
+        server,state,status=attach_guard(client.pid,dll,policy,run_dir,launched_cli=True,engine_command=engine_command,engine_factory=engine_factory)
     except Exception:
         # Do not close stdin and accidentally release an unguarded request.
         suspend(client.pid)

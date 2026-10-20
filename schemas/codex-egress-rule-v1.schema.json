@@ -1,0 +1,51 @@
+{
+  "additionalProperties": false,
+  "description": "Observation rule. It never installs a filter or implies execution.",
+  "properties": {
+    "rule_id": {
+      "title": "Rule Id",
+      "type": "string"
+    },
+    "image_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Image Sha256",
+      "type": "string"
+    },
+    "destination_address": {
+      "title": "Destination Address",
+      "type": "string"
+    },
+    "destination_port": {
+      "exclusiveMinimum": 0,
+      "maximum": 65535,
+      "title": "Destination Port",
+      "type": "integer"
+    },
+    "protocol": {
+      "enum": [
+        "tcp",
+        "udp"
+      ],
+      "title": "Protocol",
+      "type": "string"
+    },
+    "action": {
+      "default": "audit",
+      "enum": [
+        "audit",
+        "recommend_block"
+      ],
+      "title": "Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rule_id",
+    "image_sha256",
+    "destination_address",
+    "destination_port",
+    "protocol"
+  ],
+  "title": "EgressRule",
+  "type": "object"
+}

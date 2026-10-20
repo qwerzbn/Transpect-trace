@@ -1,0 +1,56 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.protect.relation/1.0",
+      "default": "transpect.protect.relation/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "left_id": {
+      "title": "Left Id",
+      "type": "string"
+    },
+    "right_id": {
+      "title": "Right Id",
+      "type": "string"
+    },
+    "grade": {
+      "enum": [
+        "EXACT",
+        "STRONG",
+        "CANDIDATE",
+        "UNKNOWN"
+      ],
+      "title": "Grade",
+      "type": "string"
+    },
+    "method": {
+      "title": "Method",
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "left_id",
+    "right_id",
+    "grade",
+    "method",
+    "evidence_ids"
+  ],
+  "title": "RequestRelation",
+  "type": "object"
+}
