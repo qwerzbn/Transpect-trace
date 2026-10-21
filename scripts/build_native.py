@@ -14,8 +14,9 @@ from _build_support import ROOT
 
 BUILDERS = {'guard':'build_guard_native.py', 'observe':'build_observe_native.py',
             'ecapture':'build_ecapture_windows.py',
-            'behavior':'build_behavior_native.py'}
+            'behavior':'build_behavior_native.py','egress':'build_egress_native.py'}
 SOURCES = {
+    'egress':['native/egress/egress.c','native/egress/fixture.c','native/egress/boundary_fixture.c','native/egress/protocol.h'],
     'behavior':['native/behavior/etw.c','native/behavior/egress_client.c','native/behavior/wfp_lease.c',
                 'native/behavior/wfp_ids.h','native/guard/etw.c'],
     'guard':['native/guard/guard.c','native/guard/etw.c','native/guard/policy_fixture.c'],
@@ -42,6 +43,7 @@ def preflight(components, variant='upstream', source=None, go=None):
         for rel in SOURCES[component]: record(rel,(ROOT/rel).is_file())
     vendors=set()
     if set(components)&{'guard'}:vendors.update(('minhook','jsmn'))
+    if 'egress' in components:vendors.add('minhook')
     if 'observe' in components or ('ecapture' in components and variant=='enhanced'):vendors.add('minhook')
     for vendor in sorted(vendors):
         folder=ROOT/'native/guard/third_party'/vendor

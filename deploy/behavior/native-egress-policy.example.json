@@ -1,0 +1,7 @@
+{
+  "default_action": "allow",
+  "targets": [
+    {"address": "127.0.0.1", "port": 1, "protocol": "tcp", "action": "block"},
+    {"address": "::1", "port": 1, "protocol": "tcp", "action": "block"}
+  ]
+}

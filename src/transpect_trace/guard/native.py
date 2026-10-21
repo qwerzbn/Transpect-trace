@@ -47,12 +47,15 @@ def api():
 
 
 def cli_mode(arguments:list[str]) -> str:
-    values={"-c","--config","-m","--model","-p","--profile","-C","--cd","--add-dir","--enable","--disable"}
+    values={"-c","--config","-m","--model","-p","--profile","-C","--cd","--add-dir","--enable","--disable",
+            '-s','--sandbox','-a','--ask-for-approval','--image','-i'}
     skip=False;command=None
-    for token in arguments[1:]:
+    for index,token in enumerate(arguments[1:],1):
         if skip:skip=False;continue
         if token in values:skip=True;continue
-        if token=="--":break
+        if token=="--":
+            if index+1<len(arguments):command='positional_after_separator'
+            break
         if token.startswith("-"):continue
         command=token;break
     if command=="exec":return "exec"

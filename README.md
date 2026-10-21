@@ -11,11 +11,13 @@
 - **ETW：** 采集进程启动/退出、文件访问和网络活动，关联 Codex 及其后代进程，形成工具执行与数据来源的行为链。
 - **WFP：** 根据已配置的网络过滤规则控制工具进程的网络连接，支持连接阻断与撤销规则后的恢复。
 
+工具后代另可启用 Native TCP 连接门控，按目标 IP 和端口执行策略；WFP 保留独立验证入口。
+
 ```text
 官方 Codex CLI
    ├─ Native Guard → 请求内容 → 本地策略引擎 → 允许 / 发送前拒绝
    ├─ Tool Calling → Shell / 工具进程 → 文件访问与网络活动
-   │                                   └─ WFP → 网络过滤
+   │                                   └─ Native 连接门控 / WFP → 网络过滤
    ├─ eCapture → TLS 明文观察 → 协议重组与请求语义提取
    └─ ETW → 进程 / 文件 / 网络事件 → 行为链与来源关联
 ```
@@ -30,10 +32,11 @@
 git clone --branch release https://github.com/qwerzbn/Transpect-trace.git
 cd Transpect-trace
 
-uv sync --locked --dev --extra observe --extra native-build
+uv sync --locked --dev --extra observe --extra native-build --extra tui
 uv run --no-sync python scripts/build_native.py --component guard
 uv run --no-sync python scripts/build_native.py --component observe
 uv run --no-sync python scripts/build_native.py --component behavior
+uv run --no-sync python scripts/build_native.py --component egress
 ```
 
 依赖通过 `pyproject.toml` 与 `uv.lock` 管理，Native 构建产物保存在 `build/`。
@@ -61,13 +64,19 @@ uv run --no-sync ttrace guard baseline --codex $codexExe
 # 启动 Codex 任务，进行请求检测与发送前门控。
 uv run --no-sync ttrace guard codex --codex $codexExe --policy-file tests/fixtures/guard-policy.json -- exec "请分析当前项目结构"
 
+# 受控交互会话：Native 就绪后才开放用户输入。
+uv run --no-sync ttrace guard codex --codex $codexExe --policy-file tests/fixtures/guard-policy.json -- --no-daemon
+
+# 对 Codex 后代进程启用明确目标的 TCP 连接策略。
+uv run --no-sync ttrace guard codex --codex $codexExe --policy-file tests/fixtures/guard-policy.json --egress-policy-file deploy/behavior/native-egress-policy.example.json -- exec "请分析当前项目结构"
+
 # 查看各模块命令。
 uv run --no-sync ttrace --help
 uv run --no-sync ttrace observe --help
 uv run --no-sync ttrace behavior --help
 ```
 
-策略示例位于 `tests/fixtures/guard-policy.json`，可配置凭据检测、登记内容和拒绝动作。运行记录保存在 `runs/`。
+策略示例位于 `tests/fixtures/guard-policy.json`，可配置凭据检测、登记内容和拒绝动作。`pii_rules` 显式启用个人信息规则。运行记录保存在 `runs/`；统一请求采集保存在对应记录的 `capture/`，并注明 TLS 或请求层采集来源。
 
 以下命令使用假数据和本地测试源站运行四模块受控验证。每次使用新的输出目录；`--elevate` 会触发 UAC，以取得采集和网络过滤所需权限。
 

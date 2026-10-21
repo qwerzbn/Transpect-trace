@@ -75,11 +75,12 @@ def events() -> list[dict]:
 
 
 class Origin:
-    def __init__(self, root: Path, cert: Path, key: Path, marker: bytes, event_factory=None):
+    def __init__(self, root: Path, cert: Path, key: Path, marker: bytes, event_factory=None, *, allow_tls12=False):
         self.root, self.marker = root, marker
         self.event_factory = event_factory or (lambda payload: events())
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.minimum_version = self.context.maximum_version = ssl.TLSVersion.TLSv1_3
+        if allow_tls12:self.context.minimum_version=ssl.TLSVersion.TLSv1_2
         self.context.load_cert_chain(cert, key)
         self.context.keylog_filename = str(root / "origin-session.keys")
         self.listener = socket.socket()

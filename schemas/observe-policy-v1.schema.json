@@ -61,6 +61,11 @@
           "default": true,
           "title": "Credential Rules",
           "type": "boolean"
+        },
+        "pii_rules": {
+          "default": false,
+          "title": "Pii Rules",
+          "type": "boolean"
         }
       },
       "title": "GuardPolicy",

@@ -3,7 +3,7 @@
   "protocol": "ECW2",
   "sha256": {
     "enhanced/enhanced_entry_windows.go": "675140a42b8a8b3dd53fe5da887515eafc750458cb57fb769895ac561cde9029",
-    "enhanced/schannel_hook.c": "a068878de2274468f1223aac8e6d334a2ce3e819cb38edc0aa39b3f8ef255292",
+    "enhanced/schannel_hook.c": "5a294475586fee9605add8a50d0cd97a51a61bebfe7344cb34045a403258ddd7",
     "enhanced/enhanced_elevation_windows.go": "e0633a35f207d6f8c39e1789036f51d5d2189e1436eddf32aef42846e1372d24"
   }
 }

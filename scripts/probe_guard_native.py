@@ -49,9 +49,10 @@ class MalformedReplyServer(PipeServer):
         return struct.pack("<I",len(raw))+raw
 
 
-def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_language:str="reference",fault:str="none",scenario:str="prompt",launcher:bool=False,coexist:bool=False,protect_bridge:bool=False,ecapture_compare:bool=False,elevate_ecapture:bool=False,behavior_compare:bool=False,elevate_behavior:bool=False,tool_command:str|None=None,on_ready=None,behavior_collector:Path|None=None,fixture_factory=None):
+def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_language:str="reference",fault:str="none",scenario:str="prompt",launcher:bool=False,coexist:bool=False,protect_bridge:bool=False,ecapture_compare:bool=False,elevate_ecapture:bool=False,behavior_compare:bool=False,elevate_behavior:bool=False,tool_command:str|None=None,on_ready=None,behavior_collector:Path|None=None,fixture_factory=None,capture_requests=False,egress_policy_file:Path|None=None):
     if fixture_factory and (launcher or engine_language!='reference' or fault!='none'):
         raise ValueError('Business fixtures require the reference direct research harness without fault injection')
+    if egress_policy_file and not launcher:raise ValueError('Public egress policy requires launcher mode')
     root.mkdir(parents=True,exist_ok=False)
     home,workspace=root/"codex-home",root/"workspace";home.mkdir();workspace.mkdir()
     marker=f"TRANSPECT_NATIVE_PROBE_{uuid4().hex}"
@@ -122,6 +123,7 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
                                   marker if action!="observe" else "NEVER_MATCH_NATIVE_FIXTURE",
                                   "block_request" if action=="observe" else action]))
             cli.extend(["--engine-command-file",str(argv_file)])
+        if egress_policy_file:cli.extend(['--egress-policy-file',str(egress_policy_file.resolve())])
         command=[*cli,"--",*command[1:]]
     with (root/"client.stdout.jsonl").open("wb") as out,(root/"client.stderr.log").open("wb") as err:
         # `exec` waits for additional stdin before issuing the model request.
@@ -139,7 +141,7 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
             server_type={"stale_reply":BadReplyServer,"malformed_reply":MalformedReplyServer}.get(fault,PipeServer)
             engine_type=SlowEngine if fault=="timeout" else PolicyEngine
             server=server_type(client.pid,fixture.get('engine') or engine_type(policy),root/"audit.jsonl")
-        cleanup=False;comparison=None;behavior=None
+        cleanup=False;comparison=None;behavior=None;request_capture=None
         observer_conflict_refused=None
         try:
             if not launcher:
@@ -164,6 +166,13 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
                     except RuntimeError:observer_conflict_refused=True
                     finally:observer.close()
                 if fault=="disconnect":server.close()
+                # Fixtures can opt into the production single-Hook snapshot tap.
+                server.request_tap=fixture.get('request_tap')
+                if capture_requests:
+                    if server.request_tap:raise ValueError('Only one request tap may own this fixture')
+                    from transpect_trace.observe.request_capture import GuardRequestTap
+                    request_capture=GuardRequestTap(root/'capture',dict(identity,image_sha256=BINARY_SHA256),policy=policy)
+                    server.request_tap=request_capture
                 if on_ready:on_ready(identity)
             client.stdin.close()
             try:code=client.wait(timeout=35)
@@ -173,7 +182,9 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
             if behavior:behavior.close()
             if comparison:comparison.close()
             if client.poll() is None:cleanup=True;client.kill();client.wait(timeout=10)
-            server.close();origin.stop.set();origin.thread.join(timeout=15);origin.listener.close()
+            server.close()
+            if request_capture:request_capture.close()
+            origin.stop.set();origin.thread.join(timeout=15);origin.listener.close()
     managed_state=None
     actual_pid=client.pid
     module_base=identity.get("module_base") if not launcher else None
@@ -212,6 +223,7 @@ def experiment(binary:Path,dll:Path,root:Path,transport:str,action:str,engine_la
                                          for name in ("client.stdout.jsonl","client.stderr.log")),
             "origin_connections":origin.records,"wss_streaming_coverage":"not_claimed"}
     if comparison:result['ecapture_comparison']=comparison.report(origin.records)
+    if request_capture:result['request_capture']=request_capture.status()
     if behavior:
         result['behavior_comparison']=behavior.report()
         if (root/'behavior/events.jsonl').exists():
@@ -239,6 +251,7 @@ def main():
     parser.add_argument('--behavior-compare',action='store_true',help='Collect Codex-scoped system evidence independently of Native Gate.')
     parser.add_argument('--elevate-behavior',action='store_true',help='UAC for the finite-duration evidence worker, not Codex.')
     parser.add_argument('--behavior-collector',type=Path,help='Manifest-checked isolated Behavior build; existing default is unchanged.')
+    parser.add_argument('--egress-policy-file',type=Path,help='Explicit descendant TCP policy for the public launcher.')
     parser.add_argument('--transport',choices=['http','wss','both'],default='both')
     args=parser.parse_args()
     if args.launcher and args.fault!="none":parser.error("fault injection uses the direct research fixture")
@@ -256,7 +269,7 @@ def main():
         binary=folder/"codex.exe";shutil.copyfile(args.codex,binary)
         if hashlib.sha256(binary.read_bytes()).hexdigest()!=BINARY_SHA256:raise RuntimeError("copy integrity failure")
     transports=['http','wss'] if args.transport=='both' else [args.transport]
-    results=[experiment(binary,args.dll,root/t,t,args.action,args.engine,args.fault,args.scenario,args.launcher,args.coexist_observer,args.protect_bridge,args.ecapture_compare,args.elevate_ecapture,args.behavior_compare,args.elevate_behavior,behavior_collector=args.behavior_collector) for t in transports]
+    results=[experiment(binary,args.dll,root/t,t,args.action,args.engine,args.fault,args.scenario,args.launcher,args.coexist_observer,args.protect_bridge,args.ecapture_compare,args.elevate_ecapture,args.behavior_compare,args.elevate_behavior,behavior_collector=args.behavior_collector,egress_policy_file=args.egress_policy_file) for t in transports]
     (root/"summary.json").write_text(json.dumps({"experiments":results},indent=2)+"\n")
     print(json.dumps({"output":str(root),"results":[{k:v for k,v in r.items() if k not in {"policy_events","origin_connections","manager_state"}} for r in results]},indent=2))
     for result in results:

@@ -31,6 +31,8 @@ static Context contexts[128]; static uint64_t epoch,birth,session_lo,session_hi,
 static volatile LONG active,callbacks;
 static volatile LONG64 dropped;
 __declspec(dllexport) volatile LONG ecapture_status;
+/* Fixed-stage diagnostics only. Never expose captured application buffers. */
+__declspec(dllexport) volatile DWORD ecapture_winerror;
 
 static Header header(unsigned kind){
     Header h={0};LARGE_INTEGER tick;QueryPerformanceCounter(&tick);
@@ -165,13 +167,17 @@ static int install(void *address,void *detour,void **original){
 }
 static DWORD WINAPI initialize(void *unused){
     (void)unused;ecapture_status=1;FILETIME ft,a,b,c;ULARGE_INTEGER t;LARGE_INTEGER freq;
-    if(!GetProcessTimes(GetCurrentProcess(),&ft,&a,&b,&c)||!QueryPerformanceFrequency(&freq))return 1;
+    if(!GetProcessTimes(GetCurrentProcess(),&ft,&a,&b,&c)||!QueryPerformanceFrequency(&freq)){ecapture_winerror=GetLastError();ecapture_status=-1;return 1;}
     t.LowPart=ft.dwLowDateTime;t.HighPart=ft.dwHighDateTime;birth=t.QuadPart;frequency=freq.QuadPart;
-    wchar_t name[160];swprintf(name,160,L"Local\\ttrace-observe-owner-%lu-%llu",GetCurrentProcessId(),(unsigned long long)birth);
-    HANDLE owner=CreateMutexW(NULL,FALSE,name);if(!owner||GetLastError()==ERROR_ALREADY_EXISTS){ecapture_status=-2;return 2;}
+    /* The owner is the SSPI function family, not every observation in a
+     * process. A Codex request-body hook can coexist with SSPI observation.
+     * install() still rejects existing detours on these actual entries. */
+    wchar_t name[160];swprintf(name,160,L"Local\\ttrace-sspi-owner-%lu-%llu",GetCurrentProcessId(),(unsigned long long)birth);
+    SetLastError(ERROR_SUCCESS);HANDLE owner=CreateMutexW(NULL,FALSE,name);DWORD owner_error=GetLastError();
+    if(!owner||owner_error==ERROR_ALREADY_EXISTS){ecapture_winerror=owner_error;ecapture_status=-2;if(owner)CloseHandle(owner);return 2;}
     swprintf(name,160,L"\\\\.\\pipe\\ecapture-enhanced-%lu-%llu",GetCurrentProcessId(),(unsigned long long)birth);
     pipe_handle=CreateFileW(name,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_EXISTING,FILE_FLAG_OVERLAPPED,NULL);
-    if(pipe_handle==INVALID_HANDLE_VALUE){ecapture_status=-3;return 3;}
+    if(pipe_handle==INVALID_HANDLE_VALUE){ecapture_winerror=GetLastError();ecapture_status=-3;return 3;}
     Header config={0};OVERLAPPED ov={0};ov.hEvent=CreateEventW(NULL,TRUE,FALSE,NULL);DWORD got=0;
     BOOL ok=ReadFile(pipe_handle,&config,sizeof(config),&got,&ov);
     if(!ok&&GetLastError()==ERROR_IO_PENDING){DWORD wait=WaitForSingleObject(ov.hEvent,3000);if(wait!=WAIT_OBJECT_0)CancelIoEx(pipe_handle,&ov);ok=GetOverlappedResult(pipe_handle,&ov,&got,TRUE)&&wait==WAIT_OBJECT_0;}

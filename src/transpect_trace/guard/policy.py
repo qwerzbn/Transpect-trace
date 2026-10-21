@@ -77,6 +77,7 @@ class GuardPolicy(BaseModel):
     allowed_upstreams: list[str] = Field(default_factory=list)
     registered_files: list[Path] = Field(default_factory=list)
     credential_rules: bool = True
+    pii_rules: bool = False
 
     @model_validator(mode="after")
     def supported_schema(self):
@@ -108,22 +109,37 @@ class PolicyEngine:
     def __init__(self, policy: GuardPolicy):
         self.policy = policy
         self.blocked_sessions: set[str] = set()
-        self.registered: list[tuple[str, str]] = []
+        from .detection import RegisteredChunk, normalize_registered_text
+        self.registered: list[RegisteredChunk] = []
+        self.registration_evidence: dict[str, dict] = {}
         for file in policy.registered_files:
             if file.stat().st_size>16*1024*1024:raise ValueError(f"registered file exceeds the v1 text limit: {file}")
-            data = file.read_text(encoding="utf-8")
+            with file.open(encoding="utf-8", newline="") as stream:
+                data = stream.read()
             if len(data.strip()) < 32:
                 raise ValueError(f"registered file needs at least 32 characters: {file}")
+            normalized = normalize_registered_text(data)
+            self.registration_evidence[str(file)] = {
+                "registration_raw_sha256": hashlib.sha256(data.encode()).hexdigest(),
+                "registration_normalized_sha256": hashlib.sha256(normalized.encode()).hexdigest(),
+            }
             # Registration snapshots are content evidence, never proof of a read.
-            for offset in range(0, len(data), 256):
-                chunk = data[offset:offset + 256]
-                if len(chunk.strip()) >= 32:
-                    self.registered.append((str(file), chunk))
+            # Even an LF-only source needs a normalized snapshot: the request
+            # may introduce CRLF after registration without changing its text.
+            snapshots = [('exact', data), ('normalized_bom_crlf', normalized)]
+            for method, snapshot in snapshots:
+                for offset in range(0, len(snapshot), 256):
+                    chunk = snapshot[offset:offset + 256]
+                    if len(chunk.strip()) >= 32:
+                        self.registered.append(RegisteredChunk(str(file), chunk, method))
 
     def evaluate(self, request: GuardRequest) -> tuple[GuardDecision, dict]:
         start = time.monotonic_ns()
+        from .detection import INSPECTION_SECONDS
+        deadline = time.monotonic() + INSPECTION_SECONDS
         hits: list[str] = []
         sources: set[str] = set()
+        registration_matches: list[dict] = []
         state, reason, action = "allow", "POLICY_ALLOW", "none"
         if request.kind != "model.request":
             audit={}
@@ -141,6 +157,8 @@ class PolicyEngine:
             state, reason, action = "unknown", "INCOMPLETE_CONTENT", "block_request"
         else:
             try:
+                from .detection import checked_text, inspection_text, registered_matches
+                checked_text(request.payload_utf8)
                 value = json.loads(request.payload_utf8)
                 if not isinstance(value, dict) or not isinstance(value.get("model"), str) or "input" not in value:
                     raise ValueError("not a supported model-request JSON object")
@@ -154,9 +172,12 @@ class PolicyEngine:
                     return False
                 if uninspectable(value.get("input")):
                     raise ValueError("binary or referenced attachment not inspected by v1")
-                text = "\n".join(strings(value))
+                text = inspection_text(value)
                 from .detection import detect_text
-                hits,sources=detect_text(text,self.policy,self.registered)
+                hits,sources=detect_text(text,self.policy,self.registered,deadline=deadline)
+                for path, method in sorted(set(registered_matches(text, self.registered,deadline=deadline))):
+                    registration_matches.append({"source_path": path, "method": method,
+                                                 **self.registration_evidence.get(path, {})})
                 if self.policy.allowed_upstreams:
                     from urllib.parse import urlsplit
                     host = urlsplit(request.destination).hostname if request.destination else None
@@ -166,7 +187,7 @@ class PolicyEngine:
                         hits.append("UPSTREAM_NOT_ALLOWED")
                 if hits:
                     state, reason, action = "deny", "CONTENT_POLICY_DENIED", self.policy.deny_action
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 state, reason, action = "unknown", "UNSUPPORTED_CONTENT", "block_request"
         if action == "block_session":
             self.blocked_sessions.add(request.guard_session_id)
@@ -180,6 +201,7 @@ class PolicyEngine:
                  "content_sha256": hashlib.sha256(request.payload_utf8.encode()).hexdigest(),
                  "content_bytes": len(request.payload_utf8.encode()), "matched_rule_ids": sorted(set(hits)),
                  "candidate_source_paths": sorted(sources), "source_confidence": "Unknown",
+                 "registered_match_evidence": registration_matches,
                  "elapsed_ms": (time.monotonic_ns() - start) / 1e6,
                  "action_execution": "not_yet_confirmed", "byte_level_taint_proof": False}
         return decision, audit

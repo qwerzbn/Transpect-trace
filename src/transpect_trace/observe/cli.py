@@ -95,13 +95,20 @@ def run(pid:int=typer.Option(...,min=1),profile_file:Path=typer.Option(...,exist
     try:
         profile=Profile.model_validate_json(profile_file.read_text(encoding="utf-8"));subject=identity(pid)
         if profile.image_sha256!=subject["image_sha256"] or profile.can_enforce:raise ValueError("observation profile identity mismatch")
-        if provider not in {"native-observer","ecapture-windows"}:raise ValueError("unknown observation provider")
-        if elevate_ecapture and provider!='ecapture-windows':raise ValueError('elevation requires ecapture-windows provider')
+        if provider not in {"native-observer","ecapture-windows","ecapture"}:raise ValueError("unknown observation provider")
+        if elevate_ecapture and provider not in {'ecapture-windows','ecapture'}:raise ValueError('elevation requires eCapture provider')
         pipeline=Pipeline(root,load_policy(policy_file) if policy_file else GuardPolicy())
         status["target"]=subject;status["profile"]=profile.model_dump()
         etw=EtwSession(Path("build/guard/etw.exe"),subject,root/"etw.jsonl");etw.start();status["etw"]=etw.state
-        collector=NativeCollector(subject,profile,dll,pipeline) if provider=="native-observer" else ECaptureCollector(subject,profile,ecapture,pipeline,elevate=elevate_ecapture)
-        if elevate_ecapture:typer.echo('Windows UAC may request confirmation for eCapture; the target stays at its existing integrity level.')
+        if provider=='ecapture':
+            from .adapters import create_collector,capability
+            adapter='codex-request' if profile.mode=='codex-json' else 'schannel'
+            status['adapter']=capability(adapter)
+            collector=create_collector(adapter,subject,profile,pipeline=pipeline,dll=dll,ecapture=ecapture,elevate=elevate_ecapture)
+        else:
+            collector=NativeCollector(subject,profile,dll,pipeline) if provider=="native-observer" else ECaptureCollector(subject,profile,ecapture,pipeline,elevate=elevate_ecapture)
+        if elevate_ecapture and isinstance(collector,ECaptureCollector):
+            typer.echo('Windows UAC may request confirmation for eCapture; the target stays at its existing integrity level.')
         collector.start();status.update(state="observing",observing_since_unix_ns=time.time_ns())
         (root/"status.json").write_text(json.dumps(status,indent=2)+"\n")
         typer.echo(str(root.resolve()))

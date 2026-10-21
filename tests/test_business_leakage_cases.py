@@ -1,7 +1,4 @@
-"""Business fixtures: positive controls plus explicit xfails for measured DLP gaps.
-
-An xfail is an unfulfilled protection expectation, never a protection pass.
-"""
+"""Business fixtures for actual required refusals and benign controls."""
 import json
 from pathlib import Path
 
@@ -38,7 +35,6 @@ def test_registered_exact_tool_text_is_rejected(tmp_path,text):
     assert decision.decision=='deny' and 'REGISTERED_CONTENT' in audit['matched_rule_ids']
 
 
-@pytest.mark.xfail(strict=True,reason='Known business coverage gap: context-aware bearer/PII/URI/nested JSON detectors are not implemented')
 @pytest.mark.parametrize('output',[
     'Authorization: Bearer FAKE_ONLY_0123456789abcdef',
     'SYNTHETIC customer phone=13800000000 email=fixture@example.invalid',
@@ -46,11 +42,10 @@ def test_registered_exact_tool_text_is_rejected(tmp_path,text):
     json.dumps({'api_secret':'FAKE_ONLY_0123456789abcdef'}),
 ])
 def test_sensitive_business_tool_output_requires_refusal(output):
-    decision,_=evaluate(output)
+    decision,_=evaluate(output,GuardPolicy(pii_rules=True))
     assert decision.decision=='deny'
 
 
-@pytest.mark.xfail(strict=True,reason='Known gap: registered exact chunks do not normalize CRLF in tool results')
 def test_registered_content_survives_windows_newline_transform(tmp_path):
     text='# Synthetic proprietary function\ndef calculate(value):\n    return value * 0.731\n'
     source=tmp_path/'fixture.txt';source.write_text(text,encoding='utf-8')

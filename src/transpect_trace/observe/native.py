@@ -20,6 +20,10 @@ class NativeCollector:
         self.name=rf"\\.\pipe\ttrace-observe-{subject['pid']}"
         self.stop=threading.Event();self.listening=threading.Event();self.ready=threading.Event();self.errors=[]
         self.thread=None;self._closed=False
+        self._loss_address=None
+        self._last_loss_check=0
+        from .request_capture import RequestCaptureSink
+        self.request_sink=RequestCaptureSink(pipeline,subject)
         freq=c.c_longlong();c.windll.kernel32.QueryPerformanceFrequency(c.byref(freq));self.frequency=freq.value
 
     def read(self,pipe,size):
@@ -79,7 +83,11 @@ class NativeCollector:
                         raise ValueError('client_process_generation_mismatch')
                 finally:
                     if peer_handle:kernel.CloseHandle(peer_handle)
-                magic,pid,tid,direction,seq,low,high,epoch,qpc,length,flags=HEADER.unpack(self.read(handle,HEADER.size))
+                values=HEADER.unpack(self.read(handle,HEADER.size))
+                magic,pid,tid,direction,seq,low,high,epoch,qpc,length,flags=values
+                if magic==b'TTQ1':
+                    self.consume_request_connection(handle,values)
+                    continue
                 if magic!=b"TTO1" or pid!=peer.value or direction>1 or length>65536:raise ValueError("invalid_capture_header")
                 kind=flags&255
                 if kind==4:
@@ -90,7 +98,11 @@ class NativeCollector:
                     continue
                 payload=self.read(handle,length)
                 complete=True
-                if kind==1:self.ready.set();continue
+                if kind==1:
+                    self.ready.set()
+                    if self.profile.mode=='codex-json':
+                        self.pipeline.write('capture-health.jsonl',self.status())
+                    continue
                 self.consume_frame(kind,pid,tid,direction,seq,low,high,epoch,qpc,flags,payload)
             except Exception as error:
                 # Never copy arbitrary parse errors / plaintext into diagnostics.
@@ -104,6 +116,29 @@ class NativeCollector:
                     except Exception:self.errors.append('capture_close_unconfirmed')
                 self.k.DisconnectNamedPipe(handle);self.k.CloseHandle(handle)
 
+    def consume_request_connection(self,handle,values):
+        from .request_capture import SnapshotAssembler,CHUNK_LIMIT,END
+        def gap(reason):
+            self.errors.append('request_snapshot_framing_gap')
+            self.request_sink.gap(reason)
+        assembler=SnapshotAssembler(self.subject,frequency=self.frequency,callback=self.request_sink,
+            gap=gap)
+        clean_eof=False
+        try:
+            # At most 256 chunks for one 16 MiB request; reject overlong streams.
+            for _ in range(256):
+                if values[0]!=b'TTQ1' or not 0<values[-2]<=CHUNK_LIMIT:
+                    raise ValueError('invalid_request_snapshot_frame')
+                digest=self.read(handle,32);payload=self.read(handle,values[-2])
+                assembler.feed(values,digest,payload)
+                if values[-1]&END:break
+                values=HEADER.unpack(self.read(handle,HEADER.size))
+            else:raise ValueError('request_snapshot_frame_limit')
+            self.finish_frame(handle)
+            clean_eof=True
+        finally:
+            assembler.finish(clean_eof=clean_eof)
+
     def consume_frame(self,kind,pid,tid,direction,seq,low,high,epoch,qpc,flags,payload):
         if kind not in {0,2,16,32}:raise ValueError('unsupported legacy observer event kind')
         point="http-body" if kind==16 else "wss-message" if kind==32 else "tls"
@@ -115,8 +150,43 @@ class NativeCollector:
         self.pipeline.consume(event)
 
     def check_health(self):
+        import time
+        # The final lost request may have no successor to carry a frame flag.
+        # Read the existing monotonic native loss counter while still running.
+        if self.ready.is_set() and not self._closed and time.monotonic()-self._last_loss_check>=1:
+            self._last_loss_check=time.monotonic()
+            from .windows import modules,exports
+            from transpect_trace.guard.native import api
+            if self._loss_address is None:
+                loaded=next((m for m in modules(self.subject['pid']) if Path(m['path']).resolve()==self.dll.resolve()),None)
+                if loaded:
+                    rva=exports(loaded['path']).get('observe_dropped')
+                    if rva:self._loss_address=loaded['base']+rva
+            k=api();handle=k.OpenProcess(0x1000|0x10,False,self.subject['pid'])
+            try:
+                times=[w.FILETIME() for _ in range(4)]
+                valid=handle and k.GetProcessTimes(handle,*(c.byref(t) for t in times)) and times[0].dwLowDateTime+(times[0].dwHighDateTime<<32)==self.subject['creation_filetime']
+                reader=c.WinDLL('kernel32',use_last_error=True)
+                reader.ReadProcessMemory.argtypes=[w.HANDLE,c.c_void_p,c.c_void_p,c.c_size_t,c.POINTER(c.c_size_t)]
+                dropped=c.c_long();size=c.c_size_t()
+                if not valid or self._loss_address is None or not reader.ReadProcessMemory(handle,self._loss_address,c.byref(dropped),4,c.byref(size)) or size.value!=4:
+                    self.errors.append('native_loss_status_unavailable')
+                elif dropped.value and 'native_capture_loss' not in self.errors:
+                    self.errors.append('native_capture_loss')
+                    self.request_sink.gap('native_capture_loss')
+            finally:
+                if handle:k.CloseHandle(handle)
         if self.errors or not self.thread or not self.thread.is_alive():
             raise RuntimeError('Native collection unavailable')
+
+    def status(self):
+        return dict(adapter='codex-request' if self.profile.mode=='codex-json' else self.profile.mode,
+            capture_layer='request-body' if self.profile.mode=='codex-json' else 'tls-plaintext',
+            hook_owner='native-observer',pid=self.subject['pid'],creation_filetime=self.subject['creation_filetime'],
+            state='degraded' if self.errors else 'stopped' if self._closed else 'observing' if self.ready.is_set() else 'initializing',
+            observed_requests=self.request_sink.completed,errors=sorted(set(self.errors)),
+            terminal_health=self._closed and bool(self.thread) and not self.thread.is_alive() and not self.errors,
+            can_enforce=False,tls_plaintext_capture=self.profile.mode!='codex-json')
 
     def _disable_capture(self):
         # Disable our own capture flag, not the gate DLL and not the process.
@@ -177,3 +247,4 @@ class NativeCollector:
             if self.thread:self.thread.join(timeout=2)
             if not self.thread or not self.thread.is_alive():self.k.LocalFree(self.security.descriptor)
             else:self.errors.append('collector_shutdown_unconfirmed')
+            if getattr(getattr(self,'profile',None),'mode',None)=='codex-json':self.pipeline.write('capture-health.jsonl',self.status())

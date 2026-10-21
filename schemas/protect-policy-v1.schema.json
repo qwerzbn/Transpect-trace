@@ -24,6 +24,11 @@
       "default": "block_request",
       "title": "Deny Action",
       "type": "string"
+    },
+    "pii_rules": {
+      "default": false,
+      "title": "Pii Rules",
+      "type": "boolean"
     }
   },
   "title": "ProtectionPolicy",

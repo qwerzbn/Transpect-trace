@@ -6,10 +6,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <bcrypt.h>
 #include "../guard/third_party/minhook/include/MinHook.h"
 
 #define CAP 65536
-#define QUEUE_CAP (8*1024*1024)
+#define QUEUE_CAP (32*1024*1024)
+#define REQUEST_CAP (16*1024*1024)
 typedef struct { char magic[4]; uint32_t pid,tid,direction; uint64_t sequence,low,high,epoch,qpc; uint32_t length,flags; } Header;
 typedef struct { char magic[4]; uint32_t mode; uint64_t birth,addresses[10]; } Config;
 typedef struct Node { struct Node *next; Header header; unsigned char bytes[]; } Node;
@@ -28,6 +30,33 @@ static _Thread_local int nested;
 __declspec(dllexport) volatile LONG observe_status;
 __declspec(dllexport) volatile LONG observe_dropped;
 static volatile LONG active;
+static uint64_t process_birth;
+static volatile LONG64 request_sequence;
+
+/* Hashing is performed on the output worker, never on the client Hook thread.
+ * Resolve BCrypt dynamically so the existing observer build remains compatible. */
+static int sha256(const unsigned char *data,size_t length,unsigned char digest[32]){
+    typedef NTSTATUS (WINAPI *Open)(BCRYPT_ALG_HANDLE*,LPCWSTR,LPCWSTR,ULONG);
+    typedef NTSTATUS (WINAPI *Get)(BCRYPT_HANDLE,LPCWSTR,PUCHAR,ULONG,ULONG*,ULONG);
+    typedef NTSTATUS (WINAPI *Create)(BCRYPT_ALG_HANDLE,BCRYPT_HASH_HANDLE*,PUCHAR,ULONG,PUCHAR,ULONG,ULONG);
+    typedef NTSTATUS (WINAPI *Data)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);
+    typedef NTSTATUS (WINAPI *Finish)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);
+    typedef NTSTATUS (WINAPI *Destroy)(BCRYPT_HASH_HANDLE);
+    typedef NTSTATUS (WINAPI *Close)(BCRYPT_ALG_HANDLE,ULONG);
+    HMODULE lib=LoadLibraryW(L"bcrypt.dll");if(!lib)return 0;
+    Open open=(Open)GetProcAddress(lib,"BCryptOpenAlgorithmProvider");Get get=(Get)GetProcAddress(lib,"BCryptGetProperty");
+    Create create=(Create)GetProcAddress(lib,"BCryptCreateHash");Data update=(Data)GetProcAddress(lib,"BCryptHashData");
+    Finish finish=(Finish)GetProcAddress(lib,"BCryptFinishHash");Destroy destroy=(Destroy)GetProcAddress(lib,"BCryptDestroyHash");
+    Close close=(Close)GetProcAddress(lib,"BCryptCloseAlgorithmProvider");
+    BCRYPT_ALG_HANDLE alg=NULL;BCRYPT_HASH_HANDLE hash=NULL;unsigned char *object=NULL;ULONG size=0,done=0;int ok=0;
+    if(!open||!get||!create||!update||!finish||!destroy||!close)goto cleanup;
+    if(open(&alg,BCRYPT_SHA256_ALGORITHM,NULL,0)<0||get(alg,BCRYPT_OBJECT_LENGTH,(PUCHAR)&size,sizeof(size),&done,0)<0||size>65536)goto cleanup;
+    object=HeapAlloc(GetProcessHeap(),0,size);if(!object)goto cleanup;
+    if(create(alg,&hash,object,size,NULL,0,0)<0||update(hash,(PUCHAR)data,(ULONG)length,0)<0||finish(hash,digest,32,0)<0)goto cleanup;
+    ok=1;
+cleanup:
+    if(hash)destroy(hash);if(object){SecureZeroMemory(object,size);HeapFree(GetProcessHeap(),0,object);}if(alg)close(alg,0);FreeLibrary(lib);return ok;
+}
 
 static Header header(unsigned flags) {
     Header h={0};memcpy(h.magic,"TTO1",4);h.pid=GetCurrentProcessId();h.tid=GetCurrentThreadId();h.flags=flags;
@@ -52,6 +81,23 @@ static void emit(uint64_t low,uint64_t high,unsigned dir,const void *data,size_t
     if((flags&255)==2)c->used=0;
     LeaveCriticalSection(&lock);SetEvent(wake);
 }
+static void emit_request(const void *data,size_t n,unsigned protocol){
+    if(!InterlockedCompareExchange(&active,0,0))return;
+    if(!data||!n||n>REQUEST_CAP){InterlockedIncrement(&observe_dropped);return;}
+    /* Reservation under the queue lock includes the worker's active request.
+     * On saturation, drop the whole snapshot, never a complete-looking prefix. */
+    EnterCriticalSection(&lock);
+    if(!InterlockedCompareExchange(&active,0,0)){LeaveCriticalSection(&lock);return;}
+    if(queued+sizeof(Node)+n>QUEUE_CAP){lost++;InterlockedIncrement(&observe_dropped);LeaveCriticalSection(&lock);return;}
+    Node *node=HeapAlloc(GetProcessHeap(),0,sizeof(Node)+n);
+    if(!node){lost++;InterlockedIncrement(&observe_dropped);LeaveCriticalSection(&lock);return;}
+    node->next=NULL;node->header=header(protocol);memcpy(node->header.magic,"TTQ1",4);
+    node->header.sequence=(uint64_t)InterlockedIncrement64(&request_sequence);node->header.low=n;
+    node->header.epoch=process_birth;node->header.length=(uint32_t)n;
+    memcpy(node->bytes,data,n);
+    if(last)last->next=node;else first=node;last=node;queued+=sizeof(Node)+n;
+    LeaveCriticalSection(&lock);SetEvent(wake);
+}
 static int write_all(HANDLE pipe,const void *data,DWORD n) {
     DWORD done=0;
     while(done<n){DWORD bytes=0;if(!WriteFile(pipe,(char*)data+done,n-done,&bytes,NULL)||!bytes)return 0;done+=bytes;}
@@ -63,7 +109,7 @@ static DWORD WINAPI drain(void *unused) {
         WaitForSingleObject(wake,1000);
         for(;;){
             EnterCriticalSection(&lock);Node *node=first;
-            if(node){first=node->next;if(!first)last=NULL;queued-=sizeof(Node)+node->header.length;}
+            if(node){first=node->next;if(!first)last=NULL;}
             LeaveCriticalSection(&lock);if(!node)break;
             HANDLE pipe=INVALID_HANDLE_VALUE;ULONGLONG deadline=GetTickCount64()+1000;
             do {
@@ -72,10 +118,19 @@ static DWORD WINAPI drain(void *unused) {
                 DWORD error=GetLastError();if(error!=ERROR_PIPE_BUSY&&error!=ERROR_FILE_NOT_FOUND)break;
                 WaitNamedPipeW(pipe_name,20);Sleep(1);
             } while(GetTickCount64()<deadline);
-            int ok=pipe!=INVALID_HANDLE_VALUE&&write_all(pipe,&node->header,sizeof(Header))&&write_all(pipe,node->bytes,node->header.length);
+            int ok=pipe!=INVALID_HANDLE_VALUE;
+            if(ok&&!memcmp(node->header.magic,"TTQ1",4)){
+                unsigned char digest[32];ok=sha256(node->bytes,node->header.length,digest);
+                for(size_t offset=0;ok&&offset<node->header.length;offset+=CAP){
+                    Header frame=node->header;size_t take=node->header.length-offset;if(take>CAP)take=CAP;
+                    frame.high=offset;frame.length=(uint32_t)take;frame.flags|=(offset==0?256:0)|(offset+take==node->header.length?512:0);
+                    ok=write_all(pipe,&frame,sizeof(frame))&&write_all(pipe,digest,sizeof(digest))&&write_all(pipe,node->bytes+offset,(DWORD)take);
+                }
+            }else if(ok)ok=write_all(pipe,&node->header,sizeof(Header))&&write_all(pipe,node->bytes,node->header.length);
             if(ok)ok=FlushFileBuffers(pipe);
             if(pipe!=INVALID_HANDLE_VALUE)CloseHandle(pipe);
             if(!ok){InterlockedExchange(&active,0);EnterCriticalSection(&lock);lost++;InterlockedIncrement(&observe_dropped);LeaveCriticalSection(&lock);}
+            EnterCriticalSection(&lock);queued-=sizeof(Node)+node->header.length;LeaveCriticalSection(&lock);
             SecureZeroMemory(node->bytes,node->header.length);HeapFree(GetProcessHeap(),0,node);
         }
     }
@@ -83,8 +138,8 @@ static DWORD WINAPI drain(void *unused) {
 __declspec(dllexport) DWORD WINAPI observe_disable(void *unused) {
     (void)unused;InterlockedExchange(&active,0);observe_status=0;
     EnterCriticalSection(&lock);
-    Node *node=first;first=last=NULL;queued=0;
-    while(node){Node *next=node->next;InterlockedIncrement(&observe_dropped);SecureZeroMemory(node->bytes,node->header.length);HeapFree(GetProcessHeap(),0,node);node=next;}
+    Node *node=first;first=last=NULL;
+    while(node){Node *next=node->next;queued-=sizeof(Node)+node->header.length;InterlockedIncrement(&observe_dropped);SecureZeroMemory(node->bytes,node->header.length);HeapFree(GetProcessHeap(),0,node);node=next;}
     LeaveCriticalSection(&lock);return 0;
 }
 typedef int (*WriteFn)(void*,const void*,int);
@@ -128,10 +183,10 @@ typedef void *(*HttpFn)(void*,void*,void*,void*);
 typedef void *(*WssFn)(void*,void*);
 static HttpFn oh;static WssFn os;
 static void *http_json(void *out,void *req,void *headers,void *body){
-    uintptr_t *b=body;if(b[2]&&b[2]<=16*1024*1024)emit(GetCurrentThreadId(),1,0,(void*)b[1],b[2],16);
+    uintptr_t *b=body;if(b[2])emit_request((void*)b[1],b[2],16);
     return oh(out,req,headers,body);
 }
-static void *wss_json(void *out,void *req){void *r=os(out,req);uintptr_t *v=out;if(v[0]==0x1c&&v[3]&&v[3]<=16*1024*1024)emit(GetCurrentThreadId(),2,0,(void*)v[2],v[3],32);return r;}
+static void *wss_json(void *out,void *req){void *r=os(out,req);uintptr_t *v=out;if(v[0]==0x1c&&v[3])emit_request((void*)v[2],v[3],32);return r;}
 
 static int hook(void *address,void *detour,void **original) {
     if(!address)return 1;
@@ -161,7 +216,7 @@ static DWORD WINAPI initialize(void *unused){
     FILETIME birth,a,b,c;ULARGE_INTEGER t;
     if(!ok||memcmp(config.magic,"TTC1",4)||!GetProcessTimes(GetCurrentProcess(),&birth,&a,&b,&c)){observe_status=-2;return 2;}
     observe_status=2;
-    t.LowPart=birth.dwLowDateTime;t.HighPart=birth.dwHighDateTime;if(t.QuadPart!=config.birth)return 3;
+    t.LowPart=birth.dwLowDateTime;t.HighPart=birth.dwHighDateTime;if(t.QuadPart!=config.birth)return 3;process_birth=t.QuadPart;
     wchar_t owner[160];swprintf(owner,160,L"Local\\ttrace-observe-owner-%lu-%llu",GetCurrentProcessId(),(unsigned long long)t.QuadPart);
     HANDLE mutex=CreateMutexW(NULL,FALSE,owner);if(!mutex||GetLastError()==ERROR_ALREADY_EXISTS)return 4;
     if(MH_Initialize()!=MH_OK){observe_status=-5;return 5;}

@@ -11,6 +11,7 @@ class ProtectionPolicy(Record):
     allowed_hosts: list[str]=Field(default_factory=list)
     review_rules: list[str]=Field(default_factory=list)
     deny_action: str='block_request'
+    pii_rules: bool=False
 
 class ProtectionEngine:
     def __init__(self,policy=None,index=None):
@@ -27,7 +28,7 @@ class ProtectionEngine:
                 from .unified import normalize
                 unified=normalize(event);fields=unified.fields;category=unified.classification
                 if category.category=='LLM':
-                    findings=detect(fields,self.index)
+                    findings=detect(fields,self.index,pii_rules=self.policy.pii_rules)
                     status='matched' if findings else 'no_match'
                     if any(f.sensitivity in {'SECRET','CONFIDENTIAL'} and f.strength in {'exact','contextual'} for f in findings):
                         decision,reason='BLOCK','SENSITIVE_CONTENT'

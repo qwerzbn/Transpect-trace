@@ -21,6 +21,8 @@ def codex(ctx:typer.Context,policy_file:Path=typer.Option(...,exists=True),
           dll:Path=typer.Option(Path("build/guard/ttrace-guard.dll"),exists=True),
           binary:Path=typer.Option(None,"--codex",exists=True),
           engine_command_file:Path=typer.Option(None,exists=True,help="JSON argv array for any-language named-pipe engine; no shell."),
+          egress_policy_file:Path|None=typer.Option(None,exists=True,help='Explicit descendant TCP destination policy.'),
+          egress_dll:Path=typer.Option(Path('build/egress/ttrace-egress.dll')),
           runs_dir:Path=typer.Option(Path("runs/guard"))):
     from .manager import launch
     from uuid import uuid4
@@ -30,7 +32,8 @@ def codex(ctx:typer.Context,policy_file:Path=typer.Option(...,exists=True),
     engine=json.loads(engine_command_file.read_text(encoding="utf-8")) if engine_command_file else None
     if engine is not None and (not isinstance(engine,list) or not engine or not all(isinstance(x,str) for x in engine)):
         raise typer.BadParameter("engine-command-file must contain a nonempty argv string array")
-    try:code,state=launch(path,args,dll,policy_file,runs_dir/uuid4().hex,engine_command=engine)
+    egress=json.loads(egress_policy_file.read_text(encoding='utf-8')) if egress_policy_file else None
+    try:code,state=launch(path,args,dll,policy_file,runs_dir/uuid4().hex,engine_command=engine,egress_policy=egress,egress_dll=egress_dll)
     except (ValueError,RuntimeError,OSError) as error:typer.echo(str(error),err=True);raise typer.Exit(1)
     typer.echo(json.dumps(state,indent=2));raise typer.Exit(code)
 
@@ -57,6 +60,30 @@ def status(run_directory:Path=typer.Argument(...,exists=True,file_okay=False)):
     state=json.loads(path.read_text(encoding="utf-8"))
     # Persisted state alone is not a live native-attestation claim.
     state["snapshot_only"]=True
+    state['live_native_attestation']='not_performed'
+    if 'tool_egress' in state:
+        state['tool_egress']['persisted_can_enforce']=state['tool_egress'].get('can_enforce',False)
+        state['tool_egress']['can_enforce']=False
+        state['tool_egress']['live_attestation']='not_performed'
+    subject=state.get('identity',{})
+    try:
+        from .native import process_identity
+        actual=process_identity(subject['pid'])
+        matches=actual['creation_filetime']==subject['creation_filetime'] and actual['baseline']['sha256']==subject['baseline']['sha256']
+    except (OSError,ValueError,RuntimeError,KeyError):matches=False
+    state['process_still_matches']=matches
+    try:
+        from transpect_trace.observe.windows import identity as controller_identity
+        expected=state['controller_identity'];actual_controller=controller_identity(expected['pid'])
+        controller_alive=(actual_controller['creation_filetime'],actual_controller['image_sha256'])==(expected['creation_filetime'],expected['image_sha256'])
+    except (OSError,ValueError,RuntimeError,KeyError):controller_alive=False
+    state['controller_still_matches']=controller_alive
+    if not matches:
+        state['persisted_state']=state.get('state');state['state']='inactive_process_exited_or_changed'
+        if 'tool_egress' in state:state['tool_egress']['can_enforce']=False
+    elif not controller_alive:
+        state['persisted_state']=state.get('state');state['state']='controller_unavailable_fail_closed_unattested'
+        if 'tool_egress' in state:state['tool_egress']['can_enforce']=False
     typer.echo(json.dumps(state,indent=2))
 
 

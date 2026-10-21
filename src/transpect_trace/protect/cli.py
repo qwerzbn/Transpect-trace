@@ -8,6 +8,8 @@ app=typer.Typer(no_args_is_help=True,help='Explicit Native adapters; uncertified
 def run(ctx:typer.Context,channel:str=typer.Option(...),
         binary:Path|None=typer.Option(None,exists=True),policy_file:Path|None=typer.Option(None,exists=True),
         index_file:Path|None=typer.Option(None,exists=True),dll:Path|None=typer.Option(None,exists=True),
+        egress_policy_file:Path|None=typer.Option(None,exists=True),
+        egress_dll:Path=typer.Option(Path('build/egress/ttrace-egress.dll')),
         runs_dir:Path=typer.Option(Path('runs/protect'))):
     try:
         if channel=='cli':
@@ -21,7 +23,9 @@ def run(ctx:typer.Context,channel:str=typer.Option(...),
             args=list(ctx.args)
             if args[:1]==['--']:args=args[1:]
             code,state=launch(binary,args,dll or Path('build/guard/ttrace-guard.dll'),policy_file,runs_dir/uuid4().hex,
-                engine_factory=lambda subject:GuardPolicyBridge(subject,engine=ProtectionEngine(policy,index)))
+                engine_factory=lambda subject:GuardPolicyBridge(subject,engine=ProtectionEngine(policy,index)),
+                egress_policy=json.loads(egress_policy_file.read_text(encoding='utf-8')) if egress_policy_file else None,
+                egress_dll=egress_dll)
         else:raise ValueError('Native safe refusal not certified for this channel; protection activation refused')
     except (OSError,ValueError,RuntimeError) as error:typer.echo(str(error),err=True);raise typer.Exit(1)
     typer.echo(json.dumps(state,indent=2));raise typer.Exit(code)
@@ -44,14 +48,27 @@ def attach(channel:str=typer.Option(...),pid:int=typer.Option(...,min=1),policy_
 def status(run_directory:Path=typer.Argument(...,exists=True,file_okay=False)):
     data=json.loads((run_directory/'status.json').read_text())
     data['snapshot_only']=True;data['live_native_attestation']='not_performed'
+    if 'tool_egress' in data:
+        data['tool_egress']['persisted_can_enforce']=data['tool_egress'].get('can_enforce',False)
+        data['tool_egress']['can_enforce']=False
+        data['tool_egress']['live_attestation']='not_performed'
     subject=data.get('identity',{})
     try:
         from transpect_trace.observe.windows import identity
         current=identity(subject['pid'])
-        data['process_still_matches']=current['creation_filetime']==subject['creation_filetime']
+        data['process_still_matches']=current['creation_filetime']==subject['creation_filetime'] and current['image_sha256']==subject.get('image_sha256',subject.get('baseline',{}).get('sha256'))
     except (OSError,ValueError,KeyError):data['process_still_matches']=False
     if not data['process_still_matches']:
         data['persisted_state']=data.get('state');data['state']='inactive_process_exited_or_changed';data['gate_ready']=False
+        if 'tool_egress' in data:data['tool_egress']['can_enforce']=False
+    else:
+        try:
+            expected=data['controller_identity'];actual=identity(expected['pid'])
+            controller_alive=(actual['creation_filetime'],actual['image_sha256'])==(expected['creation_filetime'],expected['image_sha256'])
+        except (OSError,ValueError,KeyError):controller_alive=False
+        if not controller_alive:
+            data['persisted_state']=data.get('state');data['state']='controller_unavailable_fail_closed_unattested';data['gate_ready']=False
+            if 'tool_egress' in data:data['tool_egress']['can_enforce']=False
     typer.echo(json.dumps(data,indent=2))
 
 @app.command('discover')

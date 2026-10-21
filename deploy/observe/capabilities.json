@@ -21,7 +21,28 @@
     "elevated_runtime_validated": true,
     "can_enforce": false,
     "production_ready": false,
-    "validated_scope": "controlled WinHTTP/Schannel fixture only; not Codex TLS or other AI clients"
+    "validated_scope": "controlled WinHTTP/Schannel fixture and fixed Codex CLI default-trust HTTP/1.1 over Schannel TLS 1.2; isolated localhost sources only",
+    "codex_validated_paths": [
+      {
+        "image_sha256": "d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec",
+        "trust_mode": "default-trust",
+        "protocol": "http",
+        "tls_backend": "schannel",
+        "tls_version": "TLSv1.2",
+        "capture_layer": "tls-plaintext",
+        "status": "complete",
+        "source_body_hash_matched": true,
+        "can_enforce": false
+      }
+    ],
+    "codex_unsupported_paths": [
+      "default-trust WSS using Rustls",
+      "custom-CA HTTP and WSS using Rustls"
+    ],
+    "coexistence_limitations": [
+      "Verified Native Observer first, eCapture second; no arbitrary reverse-order certification",
+      "Resident DLL and hooks remain until target process exits; same-process collector restart not certified"
+    ]
   },
   "request_interfaces": {
     "classification": "transpect.observe.classification/1.0",
@@ -60,5 +81,22 @@
     "file-upload gating",
     "OCR",
     "whole-system bypass prevention"
-  ]
+  ],
+  "codex_request_adapter": {
+    "adapter": "codex-request",
+    "capture_layer": "request-body",
+    "native_snapshot_protocol": "TTQ1",
+    "hook_owner": {
+      "protection": "native-guard",
+      "observation": "native-observer"
+    },
+    "payload_limit_bytes": 16777216,
+    "frame_limit_bytes": 65536,
+    "snapshot_integrity": "process-birth-request-id-ordered-offset-end-sha256",
+    "network_connection_identity": "unknown",
+    "tls_plaintext_capture": false,
+    "can_enforce": false,
+    "control_executor": "separate original Native Guard",
+    "production_ready": false
+  }
 }

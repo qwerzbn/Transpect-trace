@@ -10,7 +10,7 @@ import subprocess
 from _build_support import ROOT
 
 
-def audit(root=ROOT):
+def audit(root=ROOT,working_tree=False):
     manifest=json.loads((root/"release-files.json").read_text(encoding="utf-8"))
     allowed=set(manifest["files"])
     tracked=set(filter(None,subprocess.check_output(
@@ -40,7 +40,7 @@ def audit(root=ROOT):
             for part in path.relative_to(root).parts):
             issues.append({"path":name,"reason":"private_or_generated_asset"})
             continue
-        raw=subprocess.check_output(["git","-C",str(root),"show",":"+name]) if name in tracked else path.read_bytes()
+        raw=subprocess.check_output(["git","-C",str(root),"show",":"+name]) if name in tracked and not working_tree else path.read_bytes()
         total+=len(raw)
         if len(raw)>1024*1024:
             issues.append({"path":name,"reason":"unexpected_large_file"})
@@ -59,7 +59,8 @@ def audit(root=ROOT):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output",type=Path)
-    args=parser.parse_args();result=audit()
+    parser.add_argument('--working-tree',action='store_true',help='Inspect pending source changes without staging them.')
+    args=parser.parse_args();result=audit(working_tree=args.working_tree)
     if args.output:
         args.output.parent.mkdir(parents=True,exist_ok=True)
         args.output.write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")

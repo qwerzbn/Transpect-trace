@@ -19,6 +19,52 @@ PIN={"repository":"https://github.com/gojue/ecapture-windows",
      "text_preview_limit":120,"production_ready":False}
 PATTERN=re.compile(r'PID:(\d+) TID:(\d+) SSPIAppData (send|recv) len=(\d+) data=(".*")')
 
+_INITIALIZATION_FAILURES={
+    -1:'dll_identity_initialization_failed',-2:'dll_hook_owner_conflict',
+    -3:'dll_pipe_open_failed',-4:'dll_configuration_rejected',
+    -5:'dll_hook_runtime_unavailable',-6:'dll_hook_entry_initialization_failed',
+    -7:'dll_output_thread_failed',-9:'dll_capture_stream_failed',
+}
+
+
+def _dll_initialization_snapshot(subject,dll,expected_sha256):
+    """Read two fixed diagnostics from the verified, same-generation target.
+
+    This neither executes remote code nor reads any application content. The
+    companion can fail before opening its pipe, so pipe timeouts alone cannot
+    distinguish hook ownership, access denial and target initialization.
+    """
+    import ctypes as c
+    from ctypes import wintypes as w
+    from pathlib import Path
+    from .windows import identity,modules,exports,digest
+    from transpect_trace.guard.native import api
+    unavailable={'state':'unavailable'}
+    try:
+        current=identity(subject['pid'])
+        if any(current[key]!=subject[key] for key in ('creation_filetime','image_sha256')):return unavailable
+        loaded=next((row for row in modules(subject['pid']) if Path(row['path']).resolve()==dll.resolve()),None)
+        if not loaded or digest(loaded['path'])!=expected_sha256:return unavailable
+        symbols=exports(loaded['path'])
+        if not symbols.get('ecapture_status'):return unavailable
+        kernel=api();handle=kernel.OpenProcess(0x1000|0x10,False,subject['pid'])
+        if not handle:return unavailable
+        try:
+            reader=c.WinDLL('kernel32',use_last_error=True)
+            reader.ReadProcessMemory.argtypes=[w.HANDLE,c.c_void_p,c.c_void_p,c.c_size_t,c.POINTER(c.c_size_t)]
+            result={'state':'observed'}
+            for name,field,kind in (('ecapture_status','stage',c.c_int32),('ecapture_winerror','winerror',c.c_uint32)):
+                if not symbols.get(name):continue
+                value=kind();size=c.c_size_t()
+                if not reader.ReadProcessMemory(handle,loaded['base']+symbols[name],c.byref(value),4,c.byref(size)) or size.value!=4:return unavailable
+                result[field]=value.value
+            current=identity(subject['pid'])
+            if any(current[key]!=subject[key] for key in ('creation_filetime','image_sha256')):return unavailable
+            result['reason']=_INITIALIZATION_FAILURES.get(result['stage'],'dll_initialization_state_observed')
+            return result
+        finally:kernel.CloseHandle(handle)
+    except (OSError,ValueError,KeyError,StopIteration):return unavailable
+
 
 def verify_build(executable):
     import json,hashlib
@@ -51,6 +97,15 @@ class ECaptureCollector:
         self.ready=threading.Event();self.errors=[];self.process=None;self.threads=[];self.sequence={}
         self.stopping=threading.Event()
         self.elevate=elevate;self.etw_started=False;self.elevation_state='not_requested'
+        self.native_initialization=None
+
+    def _diagnose_initialization(self):
+        manifest=getattr(self,'_verified_manifest',{})
+        expected=manifest.get('artifacts_sha256',{}).get('schannel_hook.dll')
+        if manifest.get('variant')!='enhanced' or not expected:return
+        self.native_initialization=_dll_initialization_snapshot(self.subject,self.executable.parent/'schannel_hook.dll',expected)
+        reason=self.native_initialization.get('reason')
+        if reason in _INITIALIZATION_FAILURES.values() and reason not in self.errors:self.errors.append(reason)
 
     def line(self,line):
         match=PATTERN.search(line)
@@ -79,6 +134,7 @@ class ECaptureCollector:
         if current['creation_filetime']!=self.subject['creation_filetime'] or current['image_sha256']!=self.subject['image_sha256']:
             raise ValueError('eCapture target identity changed')
         manifest=verify_build(self.executable)
+        self._verified_manifest=manifest
         enhanced=manifest.get('variant')=='enhanced'
         if enhanced and self.profile.mode!='schannel':raise ValueError('enhanced eCapture only supports Schannel')
         from .elevation import is_elevated,ElevatedCapture
@@ -136,8 +192,10 @@ class ECaptureCollector:
             if self.ready.wait(0.1):return
             if self.process.poll() is not None:
                 self.errors.append('ecapture_exited_before_readiness')
+                self._diagnose_initialization()
                 raise RuntimeError("eCapture exited before readiness; verify ETW privileges and build manifest")
         self.errors.append('ecapture_readiness_timeout')
+        self._diagnose_initialization()
         raise RuntimeError("eCapture readiness unverified")
 
     def check_health(self):

@@ -20,6 +20,6 @@ def test_schema_generator_from_unrelated_directory_preserves_public_contracts(tm
 
 
 def test_legacy_builders_help_never_builds_from_foreign_cwd(tmp_path):
-    for name in ('build_native.py','build_guard_native.py','build_observe_native.py','build_behavior_native.py','build_ecapture_windows.py'):
+    for name in ('build_native.py','build_guard_native.py','build_observe_native.py','build_behavior_native.py','build_egress_native.py','build_ecapture_windows.py'):
         subprocess.run([sys.executable,str(ROOT/'scripts'/name),'--help'],cwd=tmp_path,check=True,capture_output=True)
     assert not list(tmp_path.iterdir())

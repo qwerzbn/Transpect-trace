@@ -166,6 +166,14 @@ def test_cli_scope_does_not_parse_prompt_text_as_a_subcommand(args,mode):
     assert cli_mode(args)==mode
 
 
+def test_tui_scope_accepts_known_flag_values_but_rejects_initial_prompt_and_app_server():
+    assert cli_mode(['codex.exe','--no-daemon','--sandbox','read-only','--ask-for-approval','never'])=='tui_no_daemon'
+    assert cli_mode(['codex.exe','--no-daemon','--sandbox','read-only','initial user prompt'])=='unsupported'
+    assert cli_mode(['codex.exe','--no-daemon','app-server'])=='unsupported'
+    assert cli_mode(['codex.exe','--no-daemon','--','INITIAL_SECRET_PROMPT'])=='unsupported'
+    assert cli_mode(['codex.exe','--no-daemon','--','--initial-literal-prompt'])=='unsupported'
+
+
 def test_external_engine_audit_drops_raw_payload_and_unknown_records():
     from transpect_trace.guard.external import audit_metadata
     assert audit_metadata({"kind":"policy.decision","request_id":"r","payload_utf8":"secret",

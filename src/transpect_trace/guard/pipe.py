@@ -66,13 +66,14 @@ def pipe_security(k):
 
 
 class PipeServer:
-    def __init__(self,pid:int,engine:PolicyEngine,audit:Path,workers:int=4):
+    def __init__(self,pid:int,engine:PolicyEngine,audit:Path,workers:int=4,request_tap=None):
         self.pid,self.engine,self.audit,self.workers=pid,engine,audit,workers
         self.name=rf"\\.\pipe\ttrace-guard-{pid}"
         self.k=windows_api();self.security=pipe_security(self.k)
         self.stop=threading.Event();self.ready=threading.Event();self.listening=threading.Event()
         self.lock=threading.Lock();self.threads=[];self.errors=[];self.records=[]
         self.closed=False
+        self.request_tap=request_tap
         audit.parent.mkdir(parents=True,exist_ok=True)
 
     def start(self):
@@ -106,6 +107,9 @@ class PipeServer:
                 if not 0<size<=MAX_FRAME_BYTES:raise ValueError("invalid frame length")
                 request=GuardRequest.model_validate_json(self._read(handle,size))
                 if request.pid!=peer.value:raise ValueError("payload PID mismatch")
+                if self.request_tap:
+                    try:self.request_tap(request)
+                    except Exception:self.errors.append('observation_tap_failed')
                 began=time.monotonic_ns()
                 with self.lock:
                     decision,row=self.engine.evaluate(request)

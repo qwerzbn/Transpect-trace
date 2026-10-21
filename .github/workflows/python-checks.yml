@@ -18,7 +18,7 @@ jobs:
         with:
           version: "0.12.18"
       - name: Install locked development dependencies
-        run: uv sync --locked --dev --extra observe
+        run: uv sync --locked --dev --extra observe --extra tui
       - name: Check dependency lock and environment
         run: |
           uv lock --check
