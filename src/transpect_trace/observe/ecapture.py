@@ -200,7 +200,10 @@ class ECaptureCollector:
 
     def check_health(self):
         if self.process:
-            self.errors.extend(e for e in getattr(self.process,'errors',[]) if e not in self.errors)
+            # Popen.errors is the text encoding error handler (normally None),
+            # whereas the UAC relay exposes a list of collector diagnostics.
+            relay_errors=getattr(self.process,'errors',None)
+            if isinstance(relay_errors,list):self.errors.extend(e for e in relay_errors if e not in self.errors)
         if self.process and self.process.poll() is not None and not self.stopping.is_set():
             if 'ecapture_process_exited' not in self.errors:self.errors.append('ecapture_process_exited')
         if self.errors:raise RuntimeError('eCapture collection unavailable')
@@ -222,7 +225,8 @@ class ECaptureCollector:
             # Relay terminal/exit is checked separately from the DLL terminal frame.
             relay_thread=getattr(self.process,'thread',None)
             if relay_thread:relay_thread.join(timeout=2)
-            self.errors.extend(e for e in getattr(self.process,'errors',[]) if e not in self.errors)
+            relay_errors=getattr(self.process,'errors',None)
+            if isinstance(relay_errors,list):self.errors.extend(e for e in relay_errors if e not in self.errors)
         if hasattr(self,'structured'):
             if not self.structured.terminal:
                 self.errors.append('terminal_capture_health_unavailable');self.structured.gap('terminal_capture_health_unavailable')

@@ -16,9 +16,24 @@ from transpect_trace.observe.unified import UnifiedLLMRequest
 from transpect_trace.observe.semantics import RequestSemantics
 from transpect_trace.observe.channels import CaptureHealth
 from transpect_trace.behavior.models import BehaviorEvent, EgressRule
+from transpect_trace.flow.models import CrossApplicationSession, TransferObservation, OutboundContentObservation, PropagationRelation
+from transpect_trace.flow.manifest import FlowManifest
+from transpect_trace.flow.agents.manifest import AgentFlowManifest
+from transpect_trace.flow.agents.models import AgentFlowSession, AgentMessageObservation, AgentPropagationRelation
 
 
 def generated_schemas():
+    for name, model in (("agent-session-v1.schema.json", AgentFlowSession),
+                        ("agent-message-v1.schema.json", AgentMessageObservation),
+                        ("agent-relation-v1.schema.json", AgentPropagationRelation),
+                        ("agent-manifest-v1.schema.json", AgentFlowManifest)):
+        yield name, model.model_json_schema(mode='serialization')
+    for name, model in (("flow-session-v1.schema.json", CrossApplicationSession),
+                        ("flow-transfer-v1.schema.json", TransferObservation),
+                        ("flow-outbound-v1.schema.json", OutboundContentObservation),
+                        ("flow-relation-v1.schema.json", PropagationRelation),
+                        ("flow-manifest-v1.schema.json", FlowManifest)):
+        yield name, model.model_json_schema(mode='serialization')
     yield "codex-behavior-v1.schema.json", BehaviorEvent.model_json_schema()
     yield "codex-egress-rule-v1.schema.json", EgressRule.model_json_schema()
     for name, model in (("guard-request-v1.schema.json", GuardRequest),

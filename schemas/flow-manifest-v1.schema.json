@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "FrozenFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "format": "path",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "FrozenFile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.flow.manifest/1.0",
+      "default": "transpect.flow.manifest/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scenario": {
+      "enum": [
+        "file",
+        "pipe"
+      ],
+      "title": "Scenario",
+      "type": "string"
+    },
+    "fake_data_only": {
+      "const": true,
+      "title": "Fake Data Only",
+      "type": "boolean"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "python": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "participant": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "uploader": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "observer": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "etw": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "native_manifest": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "ecapture": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "ecapture_manifest": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "source": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "content_index": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "certificate": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "private_key": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "output": {
+      "format": "path",
+      "title": "Output",
+      "type": "string"
+    },
+    "content_type": {
+      "default": "text",
+      "enum": [
+        "text",
+        "json"
+      ],
+      "title": "Content Type",
+      "type": "string"
+    },
+    "ordinary_body": {
+      "default": false,
+      "title": "Ordinary Body",
+      "type": "boolean"
+    },
+    "export_fake_bodies": {
+      "default": false,
+      "title": "Export Fake Bodies",
+      "type": "boolean"
+    },
+    "timeout_seconds": {
+      "default": 30,
+      "maximum": 90,
+      "minimum": 10,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "scenario",
+    "fake_data_only",
+    "python",
+    "participant",
+    "uploader",
+    "observer",
+    "etw",
+    "native_manifest",
+    "ecapture",
+    "ecapture_manifest",
+    "source",
+    "content_index",
+    "certificate",
+    "private_key",
+    "output"
+  ],
+  "title": "FlowManifest",
+  "type": "object"
+}

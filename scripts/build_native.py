@@ -14,8 +14,9 @@ from _build_support import ROOT
 
 BUILDERS = {'guard':'build_guard_native.py', 'observe':'build_observe_native.py',
             'ecapture':'build_ecapture_windows.py',
-            'behavior':'build_behavior_native.py','egress':'build_egress_native.py'}
+            'behavior':'build_behavior_native.py','egress':'build_egress_native.py', 'flow':'build_flow_native.py'}
 SOURCES = {
+    'flow':['native/flow/io_observer.c','native/flow/protocol.h','native/flow/uploader.c','native/flow/etw.c','native/behavior/etw.c','native/guard/etw.c'],
     'egress':['native/egress/egress.c','native/egress/fixture.c','native/egress/boundary_fixture.c','native/egress/protocol.h'],
     'behavior':['native/behavior/etw.c','native/behavior/egress_client.c','native/behavior/wfp_lease.c',
                 'native/behavior/wfp_ids.h','native/guard/etw.c'],
@@ -43,7 +44,7 @@ def preflight(components, variant='upstream', source=None, go=None):
         for rel in SOURCES[component]: record(rel,(ROOT/rel).is_file())
     vendors=set()
     if set(components)&{'guard'}:vendors.update(('minhook','jsmn'))
-    if 'egress' in components:vendors.add('minhook')
+    if set(components)&{'egress','flow'}:vendors.add('minhook')
     if 'observe' in components or ('ecapture' in components and variant=='enhanced'):vendors.add('minhook')
     for vendor in sorted(vendors):
         folder=ROOT/'native/guard/third_party'/vendor

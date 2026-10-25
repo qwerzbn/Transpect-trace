@@ -1,0 +1,127 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "transpect.agent.relation/1.0",
+      "default": "transpect.agent.relation/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "relation_id": {
+      "title": "Relation Id",
+      "type": "string"
+    },
+    "left_id": {
+      "title": "Left Id",
+      "type": "string"
+    },
+    "right_id": {
+      "title": "Right Id",
+      "type": "string"
+    },
+    "relation_kind": {
+      "enum": [
+        "source_message_candidate",
+        "agent_message_handoff",
+        "protocol_parent_reference"
+      ],
+      "title": "Relation Kind",
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "High",
+        "Medium",
+        "Low",
+        "Unknown"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "method": {
+      "enum": [
+        "same_process_registered_content_or_exact_payload",
+        "observed_protocol_and_native_handoff",
+        "outbound_declared_parent_identifier"
+      ],
+      "title": "Method",
+      "type": "string"
+    },
+    "content_evidence": {
+      "default": "none",
+      "enum": [
+        "exact_payload",
+        "registered_content_overlap",
+        "none"
+      ],
+      "title": "Content Evidence",
+      "type": "string"
+    },
+    "shared_registration_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Shared Registration Ids",
+      "type": "array"
+    },
+    "base_relation_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Base Relation Ids",
+      "type": "array"
+    },
+    "evidence_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Event Ids",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "protocol_declaration_only": {
+      "default": false,
+      "title": "Protocol Declaration Only",
+      "type": "boolean"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    },
+    "unique_source_proven": {
+      "const": false,
+      "default": false,
+      "title": "Unique Source Proven",
+      "type": "boolean"
+    },
+    "merged": {
+      "const": false,
+      "default": false,
+      "title": "Merged",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "left_id",
+    "right_id",
+    "relation_kind",
+    "confidence",
+    "method"
+  ],
+  "title": "AgentPropagationRelation",
+  "type": "object"
+}

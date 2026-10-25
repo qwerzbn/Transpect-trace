@@ -1,0 +1,95 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "transpect.flow.relation/1.0",
+      "default": "transpect.flow.relation/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "relation_id": {
+      "title": "Relation Id",
+      "type": "string"
+    },
+    "left_id": {
+      "title": "Left Id",
+      "type": "string"
+    },
+    "right_id": {
+      "title": "Right Id",
+      "type": "string"
+    },
+    "relation_kind": {
+      "enum": [
+        "file_handoff_candidate",
+        "pipe_handoff_candidate",
+        "within_process_content_candidate",
+        "outbound_content_candidate"
+      ],
+      "title": "Relation Kind",
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "High",
+        "Medium",
+        "Low",
+        "Unknown"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "method": {
+      "title": "Method",
+      "type": "string"
+    },
+    "evidence_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Event Ids",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    },
+    "unique_source_proven": {
+      "const": false,
+      "default": false,
+      "title": "Unique Source Proven",
+      "type": "boolean"
+    },
+    "merged": {
+      "const": false,
+      "default": false,
+      "title": "Merged",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "left_id",
+    "right_id",
+    "relation_kind",
+    "confidence",
+    "method",
+    "evidence_event_ids"
+  ],
+  "title": "PropagationRelation",
+  "type": "object"
+}

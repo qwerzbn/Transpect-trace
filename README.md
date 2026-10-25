@@ -78,6 +78,12 @@ uv run --no-sync ttrace guard codex --codex $codexExe --policy-file $policyFile 
 
 ## 可选模块
 
+跨应用文件／Named Pipe 传播检测另见 [受控实验说明](docs/development/cross-application-flow.md)，使用 `ttrace flow`，与 Codex 请求门控分开验收。
+
+两个测试 Agent 的查询、委派、转换与外发追踪另见 [跨 Agent 实验](docs/development/cross-agent-flow.md)，使用 `ttrace flow agents`，保持观察模式。
+
+并发、重试、改写和采集停止的复现入口见 [复杂联动验收](docs/development/flow-linkage.md)。
+
 按需要构建；基础 Guard 不依赖下面三个 Native 组件。
 
 ```powershell

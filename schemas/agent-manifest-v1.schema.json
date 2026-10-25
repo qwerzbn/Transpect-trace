@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "FrozenFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "format": "path",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "FrozenFile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.agent-flow.manifest/1.0",
+      "default": "transpect.agent-flow.manifest/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "fake_data_only": {
+      "const": true,
+      "title": "Fake Data Only",
+      "type": "boolean"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "agent_kind": {
+      "const": "deterministic_test_agent",
+      "default": "deterministic_test_agent",
+      "title": "Agent Kind",
+      "type": "string"
+    },
+    "transport": {
+      "const": "local_message_pipe",
+      "default": "local_message_pipe",
+      "title": "Transport",
+      "type": "string"
+    },
+    "python": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "participant": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "implementation": {
+      "additionalProperties": {
+        "$ref": "#/$defs/FrozenFile"
+      },
+      "title": "Implementation",
+      "type": "object"
+    },
+    "observer": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "etw": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "native_manifest": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "ecapture": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "ecapture_manifest": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "source": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "content_index": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "certificate": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "private_key": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "output": {
+      "format": "path",
+      "title": "Output",
+      "type": "string"
+    },
+    "transform": {
+      "default": "copy",
+      "enum": [
+        "copy",
+        "nested",
+        "extractive",
+        "public"
+      ],
+      "title": "Transform",
+      "type": "string"
+    },
+    "handoff_public": {
+      "default": false,
+      "title": "Handoff Public",
+      "type": "boolean"
+    },
+    "timeout_seconds": {
+      "default": 30,
+      "maximum": 90,
+      "minimum": 10,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "fake_data_only",
+    "python",
+    "participant",
+    "implementation",
+    "observer",
+    "etw",
+    "native_manifest",
+    "ecapture",
+    "ecapture_manifest",
+    "source",
+    "content_index",
+    "certificate",
+    "private_key",
+    "output"
+  ],
+  "title": "AgentFlowManifest",
+  "type": "object"
+}

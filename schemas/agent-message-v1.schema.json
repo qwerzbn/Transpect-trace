@@ -1,0 +1,442 @@
+{
+  "$defs": {
+    "DetectionFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "transpect.protect.finding/1.0",
+          "default": "transpect.protect.finding/1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "detector_version": {
+          "title": "Detector Version",
+          "type": "string"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "location": {
+          "title": "Location",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "strength": {
+          "enum": [
+            "weak",
+            "contextual",
+            "exact"
+          ],
+          "title": "Strength",
+          "type": "string"
+        },
+        "sensitivity": {
+          "default": "UNKNOWN",
+          "enum": [
+            "PUBLIC",
+            "INTERNAL",
+            "CONFIDENTIAL",
+            "SECRET",
+            "UNKNOWN"
+          ],
+          "title": "Sensitivity",
+          "type": "string"
+        },
+        "data_types": {
+          "items": {
+            "enum": [
+              "credential",
+              "private_key",
+              "source_code",
+              "personal_information",
+              "registered_text"
+            ],
+            "type": "string"
+          },
+          "title": "Data Types",
+          "type": "array"
+        },
+        "evidence_sha256": {
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registration Id"
+        },
+        "index_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Index Version"
+        }
+      },
+      "required": [
+        "detector_version",
+        "rule_id",
+        "location",
+        "severity",
+        "strength",
+        "data_types",
+        "evidence_sha256"
+      ],
+      "title": "DetectionFinding",
+      "type": "object"
+    },
+    "FlowProcess": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "role": {
+          "enum": [
+            "A",
+            "B"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 0,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "creation_filetime": {
+          "exclusiveMinimum": 0,
+          "title": "Creation Filetime",
+          "type": "integer"
+        },
+        "image_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "pid",
+        "creation_filetime",
+        "image_sha256"
+      ],
+      "title": "FlowProcess",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "transpect.agent.observation/1.0",
+      "default": "transpect.agent.observation/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "original_observation_id": {
+      "title": "Original Observation Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "source_read",
+        "message_write",
+        "message_read",
+        "outbound"
+      ],
+      "title": "Stage",
+      "type": "string"
+    },
+    "process": {
+      "$ref": "#/$defs/FlowProcess"
+    },
+    "agent_id": {
+      "enum": [
+        "agent-a",
+        "agent-b"
+      ],
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "capture_source": {
+      "enum": [
+        "native-io",
+        "ecapture-windows"
+      ],
+      "title": "Capture Source",
+      "type": "string"
+    },
+    "capture_layer": {
+      "enum": [
+        "io",
+        "tls"
+      ],
+      "title": "Capture Layer",
+      "type": "string"
+    },
+    "protocol_status": {
+      "enum": [
+        "valid",
+        "invalid",
+        "not_applicable"
+      ],
+      "title": "Protocol Status",
+      "type": "string"
+    },
+    "task_id_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Id Sha256"
+    },
+    "message_id_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message Id Sha256"
+    },
+    "parent_message_id_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Message Id Sha256"
+    },
+    "tool_call_id_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tool Call Id Sha256"
+    },
+    "protocol_attempt_id_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Protocol Attempt Id Sha256"
+    },
+    "local_attempt_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Local Attempt Id"
+    },
+    "body_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Body Sha256",
+      "type": "string"
+    },
+    "body_bytes": {
+      "maximum": 1048576,
+      "minimum": 0,
+      "title": "Body Bytes",
+      "type": "integer"
+    },
+    "payload_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Payload Sha256"
+    },
+    "payload_bytes": {
+      "anyOf": [
+        {
+          "maximum": 1048576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Payload Bytes"
+    },
+    "payload_representation": {
+      "anyOf": [
+        {
+          "enum": [
+            "text",
+            "json"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Payload Representation"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "detection_status": {
+      "enum": [
+        "matched",
+        "no_match",
+        "incomplete"
+      ],
+      "title": "Detection Status",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/DetectionFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "sensitivity_labels": {
+      "items": {
+        "enum": [
+          "PUBLIC",
+          "INTERNAL",
+          "CONFIDENTIAL",
+          "SECRET",
+          "UNKNOWN"
+        ],
+        "type": "string"
+      },
+      "title": "Sensitivity Labels",
+      "type": "array"
+    },
+    "llm_classification": {
+      "default": "UNKNOWN",
+      "enum": [
+        "LLM",
+        "NON_LLM",
+        "UNKNOWN"
+      ],
+      "title": "Llm Classification",
+      "type": "string"
+    },
+    "evidence_event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Event Ids",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "label_basis": {
+      "const": "observed_content_detection_only",
+      "default": "observed_content_detection_only",
+      "title": "Label Basis",
+      "type": "string"
+    }
+  },
+  "required": [
+    "original_observation_id",
+    "session_id",
+    "stage",
+    "process",
+    "agent_id",
+    "capture_source",
+    "capture_layer",
+    "protocol_status",
+    "body_sha256",
+    "body_bytes",
+    "completeness",
+    "detection_status"
+  ],
+  "title": "AgentMessageObservation",
+  "type": "object"
+}

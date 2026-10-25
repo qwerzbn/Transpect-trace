@@ -11,11 +11,12 @@ from .semantics import from_unified
 
 
 class Pipeline:
-    def __init__(self,directory:Path,policy,*,synthetic_bodies=False,semantic_sink=None):
+    def __init__(self,directory:Path,policy,*,synthetic_bodies=False,semantic_sink=None,body_sink=None):
         self.directory=directory;directory.mkdir(parents=True,exist_ok=True)
         self.assessor=Assessor(policy);self.connections={};self.rows=[];self.assessments=[];self.gaps=[]
         self.synthetic_bodies=synthetic_bodies
         self.semantic_sink=semantic_sink
+        self.body_sink=body_sink
 
     def write(self,name,row):
         with (self.directory/name).open("a",encoding="utf-8") as out:out.write(json.dumps(row,ensure_ascii=False)+"\n")
@@ -42,6 +43,13 @@ class Pipeline:
             if len(self.rows)>=10000:
                 self.gap(event,'observation_count_limit');break
             obs,risk=self.assessor.assess(event,body)
+            if self.body_sink:
+                try:
+                    # Transient bytes only. Generic sinks independently evaluate
+                    # transport completeness; LLM recognition is not a prerequisite.
+                    self.body_sink(event,body,obs.observation_id)
+                except Exception:
+                    self.gap(event,'body_sink_failed')
             row=obs.model_dump();self.rows.append(row);self.assessments.append(risk.model_dump())
             self.write("observations.jsonl",row);self.write("assessments.jsonl",risk.model_dump())
             unified=normalize(event,body,obs)

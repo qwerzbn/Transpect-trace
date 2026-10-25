@@ -48,7 +48,7 @@ def evidence_paths(root=ROOT):
 
 
 def check(root=ROOT,with_local_evidence=False):
-    required=['src/transpect_trace/'+name for name in ('guard','observe','protect','behavior')]
+    required=['src/transpect_trace/'+name for name in ('guard','observe','protect','behavior','flow')]
     required+=['native','schemas','tests','scripts','deploy','patches','.github']
     missing=[rel for rel in required if not (root/rel).is_dir()]
     tracked=subprocess.check_output(['git','-C',str(root),'ls-files','-z']).decode('utf-8').split('\0')
@@ -63,12 +63,16 @@ def check(root=ROOT,with_local_evidence=False):
     from typer.main import get_command
     from transpect_trace.cli import app
     registered=sorted(get_command(app).commands)
+    flow_commands=get_command(app).commands['flow'].commands
+    agent_commands=sorted(flow_commands['agents'].commands) if 'agents' in flow_commands else []
     links=local_links(root)
     evidence=evidence_paths(root) if with_local_evidence else []
-    passed=not missing and not forbidden and all(ignored.values()) and entrypoints==expected and {'guard','observe','protect','behavior'}==set(registered)
+    passed=not missing and not forbidden and all(ignored.values()) and entrypoints==expected and {'guard','observe','protect','behavior','flow'}==set(registered)
     passed=passed and not links['missing'] and all(r['exists'] for r in evidence)
+    passed=passed and {'run','status','report','agents'}==set(flow_commands) and agent_commands==['report','run','status']
     return {'passed':passed,'missing_directories':missing,'forbidden_tracked_paths':forbidden,
-            'ignore_checks':ignored,'entrypoints':entrypoints,'cli_commands':registered,'links':links,
+            'ignore_checks':ignored,'entrypoints':entrypoints,'cli_commands':registered,
+            'flow_commands':sorted(flow_commands),'agent_flow_commands':agent_commands,'links':links,
             'evidence_paths':evidence,'local_evidence_checked':with_local_evidence,
             'runtime_capture_certified':False}
 

@@ -4,12 +4,14 @@ from transpect_trace.guard.cli import app as guard_app
 from transpect_trace.observe.cli import app as observe_app
 from transpect_trace.behavior.cli import app as behavior_app
 from transpect_trace.protect.cli import app as protect_app
+from transpect_trace.flow.cli import app as flow_app
 
 app = typer.Typer(no_args_is_help=True, help="Windows fixed Codex content gate, TLS observation and behavior evidence.")
 app.add_typer(guard_app, name="guard")
 app.add_typer(observe_app, name="observe")
 app.add_typer(behavior_app, name="behavior")
 app.add_typer(protect_app, name="protect")
+app.add_typer(flow_app, name="flow")
 
 def main():
     app()

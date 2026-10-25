@@ -1,0 +1,215 @@
+{
+  "$defs": {
+    "CollectorHealth": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "ready": {
+          "default": false,
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "terminal": {
+          "default": false,
+          "title": "Terminal",
+          "type": "boolean"
+        },
+        "identity_verified": {
+          "default": false,
+          "title": "Identity Verified",
+          "type": "boolean"
+        },
+        "lost_events": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Lost Events",
+          "type": "integer"
+        },
+        "errors": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Errors",
+          "type": "integer"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "title": "CollectorHealth",
+      "type": "object"
+    },
+    "FlowProcess": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "role": {
+          "enum": [
+            "A",
+            "B"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 0,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "creation_filetime": {
+          "exclusiveMinimum": 0,
+          "title": "Creation Filetime",
+          "type": "integer"
+        },
+        "image_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "pid",
+        "creation_filetime",
+        "image_sha256"
+      ],
+      "title": "FlowProcess",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "transpect.flow.session/1.0",
+      "default": "transpect.flow.session/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "subjects": {
+      "items": {
+        "$ref": "#/$defs/FlowProcess"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Subjects",
+      "type": "array"
+    },
+    "scenario": {
+      "anyOf": [
+        {
+          "enum": [
+            "file",
+            "pipe"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scenario"
+    },
+    "membership_basis": {
+      "const": "explicit_registration_not_lineage",
+      "default": "explicit_registration_not_lineage",
+      "title": "Membership Basis",
+      "type": "string"
+    },
+    "build_identities": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Build Identities",
+      "type": "object"
+    },
+    "started_at_utc": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started At Utc"
+    },
+    "ended_at_utc": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ended At Utc"
+    },
+    "health": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CollectorHealth"
+      },
+      "title": "Health",
+      "type": "object"
+    },
+    "status": {
+      "default": "starting",
+      "enum": [
+        "starting",
+        "observing",
+        "complete",
+        "partial",
+        "unavailable"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session_id",
+    "subjects"
+  ],
+  "title": "CrossApplicationSession",
+  "type": "object"
+}

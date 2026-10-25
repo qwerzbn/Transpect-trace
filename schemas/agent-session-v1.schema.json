@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "FlowProcess": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "role": {
+          "enum": [
+            "A",
+            "B"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 0,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "creation_filetime": {
+          "exclusiveMinimum": 0,
+          "title": "Creation Filetime",
+          "type": "integer"
+        },
+        "image_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "pid",
+        "creation_filetime",
+        "image_sha256"
+      ],
+      "title": "FlowProcess",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "transpect.agent.session/1.0",
+      "default": "transpect.agent.session/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "task_id_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Id Sha256",
+      "type": "string"
+    },
+    "subjects": {
+      "items": {
+        "$ref": "#/$defs/FlowProcess"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Subjects",
+      "type": "array"
+    },
+    "identity_basis": {
+      "const": "explicit_agent_to_process_registration",
+      "default": "explicit_agent_to_process_registration",
+      "title": "Identity Basis",
+      "type": "string"
+    },
+    "status": {
+      "default": "observing",
+      "enum": [
+        "observing",
+        "complete",
+        "partial",
+        "unavailable"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "base_flow_status": {
+      "default": "unknown",
+      "enum": [
+        "starting",
+        "observing",
+        "complete",
+        "partial",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "Base Flow Status",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session_id",
+    "task_id_sha256",
+    "subjects"
+  ],
+  "title": "AgentFlowSession",
+  "type": "object"
+}

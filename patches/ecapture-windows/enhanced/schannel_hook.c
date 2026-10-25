@@ -24,12 +24,23 @@ typedef SECURITY_STATUS(WINAPI *Enc)(PCtxtHandle,ULONG,PSecBufferDesc,ULONG);
 typedef SECURITY_STATUS(WINAPI *Dec)(PCtxtHandle,PSecBufferDesc,ULONG,PULONG);
 typedef SECURITY_STATUS(WINAPI *Del)(PCtxtHandle);
 static Enc original_enc; static Dec original_dec; static Del original_del;
-static CRITICAL_SECTION lock;
+/* The output worker never owns context_lock. Publishers take queue_lock first
+ * so a stalled dequeue cannot make begin() lose an otherwise valid record. */
+static CRITICAL_SECTION context_lock,queue_lock;
 static HANDLE wake,pipe_handle;
 static Node *first,*last; static size_t queued;
 static Context contexts[128]; static uint64_t epoch,birth,session_lo,session_hi,frequency;
 static volatile LONG active,callbacks;
-static volatile LONG64 dropped;
+__declspec(dllexport) volatile LONG64 ecapture_loss_total;
+__declspec(dllexport) volatile LONG64 ecapture_loss_begin_lock;
+__declspec(dllexport) volatile LONG64 ecapture_loss_context_unavailable;
+__declspec(dllexport) volatile LONG64 ecapture_loss_capture_alloc;
+__declspec(dllexport) volatile LONG64 ecapture_loss_node_alloc;
+__declspec(dllexport) volatile LONG64 ecapture_loss_queue_capacity;
+__declspec(dllexport) volatile LONG64 ecapture_loss_sspi;
+__declspec(dllexport) volatile LONG64 ecapture_loss_transport;
+__declspec(dllexport) volatile LONG64 ecapture_loss_queue_abandoned;
+#define dropped ecapture_loss_total
 __declspec(dllexport) volatile LONG ecapture_status;
 /* Fixed-stage diagnostics only. Never expose captured application buffers. */
 __declspec(dllexport) volatile DWORD ecapture_winerror;
@@ -40,7 +51,7 @@ static Header header(unsigned kind){
     h.birth=birth;h.session_lo=session_lo;h.session_hi=session_hi;h.qpc=tick.QuadPart;h.frequency=frequency;
     h.lost=(uint64_t)InterlockedCompareExchange64(&dropped,0,0);return h;
 }
-static void lose(void){InterlockedIncrement64(&dropped);}
+static void lose(volatile LONG64*reason){InterlockedIncrement64(reason);InterlockedIncrement64(&dropped);}
 static Context *context(PCtxtHandle ctx){
     if(!ctx)return NULL;
     for(int i=0;i<128;i++)if(contexts[i].used&&contexts[i].low==ctx->dwLower&&contexts[i].high==ctx->dwUpper)return &contexts[i];
@@ -48,28 +59,30 @@ static Context *context(PCtxtHandle ctx){
     return NULL;
 }
 static Context *begin(PCtxtHandle ctx,unsigned dir,Header *h){
-    if(!TryEnterCriticalSection(&lock)){lose();return NULL;}
+    if(!TryEnterCriticalSection(&context_lock)){lose(&ecapture_loss_begin_lock);return NULL;}
     Context *c=context(ctx);
     if(c){
         if(c->busy[dir])c->uncertain=1;
         c->busy[dir]++;h->low=c->low;h->high=c->high;h->generation=c->epoch;h->direction=dir;
-    }else lose();
-    LeaveCriticalSection(&lock);return c;
+    }else lose(&ecapture_loss_context_unavailable);
+    LeaveCriticalSection(&context_lock);return c;
 }
 static void finish(Context *c,Header h,const BYTE *data,size_t n,int emit,int closed){
     if(n>CAP){n=CAP;h.flags|=256;}
     Node *node=emit?HeapAlloc(GetProcessHeap(),0,sizeof(Node)+n):NULL;
-    if(emit&&!node)lose();
-    EnterCriticalSection(&lock);
+    if(emit&&!node)lose(&ecapture_loss_node_alloc);
+    /* Potentially large copies and allocations are outside both locks. */
+    if(node){node->next=NULL;if(n)memcpy(node->data,data,n);EnterCriticalSection(&queue_lock);}
+    EnterCriticalSection(&context_lock);
     if(c->uncertain||c->busy[0]>1||c->busy[1]>1)h.flags|=512;
     if(emit)h.sequence=++c->seq[h.direction];
     c->busy[h.direction]--;if(closed){if(c->busy[0]||c->busy[1])h.flags|=512;c->used=0;}
-    if(!node){LeaveCriticalSection(&lock);return;}
+    if(!node){LeaveCriticalSection(&context_lock);return;}
     h.length=(uint32_t)n;h.lost=(uint64_t)InterlockedCompareExchange64(&dropped,0,0);
-    node->h=h;node->next=NULL;if(n)memcpy(node->data,data,n);
-    if(queued+sizeof(Node)+n>QUEUE_CAP){LeaveCriticalSection(&lock);SecureZeroMemory(node->data,n);HeapFree(GetProcessHeap(),0,node);lose();return;}
+    node->h=h;
+    if(queued+sizeof(Node)+n>QUEUE_CAP){LeaveCriticalSection(&context_lock);LeaveCriticalSection(&queue_lock);SecureZeroMemory(node->data,n);HeapFree(GetProcessHeap(),0,node);lose(&ecapture_loss_queue_capacity);return;}
     if(last)last->next=node;else first=node;last=node;queued+=sizeof(Node)+n;
-    LeaveCriticalSection(&lock);SetEvent(wake);
+    LeaveCriticalSection(&context_lock);LeaveCriticalSection(&queue_lock);SetEvent(wake);
 }
 static size_t copy_data(PSecBufferDesc msg,BYTE *copy,unsigned *flags){
     size_t n=0;
@@ -86,9 +99,9 @@ static SECURITY_STATUS WINAPI encrypt_hook(PCtxtHandle ctx,ULONG qop,PSecBufferD
     DWORD before=GetLastError();InterlockedIncrement(&callbacks);
     if(!InterlockedCompareExchange(&active,0,0)){InterlockedDecrement(&callbacks);SetLastError(before);return original_enc(ctx,qop,msg,seq);}
     Header h=header(0);Context *c=begin(ctx,0,&h);BYTE *copy=c?HeapAlloc(GetProcessHeap(),0,CAP):NULL;
-    if(c&&!copy)lose();size_t n=copy?copy_data(msg,copy,&h.flags):0;
+    if(c&&!copy)lose(&ecapture_loss_capture_alloc);size_t n=copy?copy_data(msg,copy,&h.flags):0;
     SetLastError(before);SECURITY_STATUS result=original_enc(ctx,qop,msg,seq);DWORD error=GetLastError();
-    if(c){finish(c,h,copy,n,result==SEC_E_OK&&copy&&(n||h.flags),0);if(result!=SEC_E_OK)lose();}
+    if(c){finish(c,h,copy,n,result==SEC_E_OK&&copy&&(n||h.flags),0);if(result!=SEC_E_OK)lose(&ecapture_loss_sspi);}
     if(copy){SecureZeroMemory(copy,n);HeapFree(GetProcessHeap(),0,copy);}InterlockedDecrement(&callbacks);SetLastError(error);return result;
 }
 static SECURITY_STATUS WINAPI decrypt_hook(PCtxtHandle ctx,PSecBufferDesc msg,ULONG seq,PULONG qop){
@@ -97,11 +110,11 @@ static SECURITY_STATUS WINAPI decrypt_hook(PCtxtHandle ctx,PSecBufferDesc msg,UL
     Header h=header(0);Context *c=begin(ctx,1,&h);
     SetLastError(before);SECURITY_STATUS result=original_dec(ctx,msg,seq,qop);DWORD error=GetLastError();
     BYTE *copy=NULL;size_t n=0;
-    if(c&&result==SEC_E_OK){copy=HeapAlloc(GetProcessHeap(),0,CAP);if(copy)n=copy_data(msg,copy,&h.flags);else lose();}
+    if(c&&result==SEC_E_OK){copy=HeapAlloc(GetProcessHeap(),0,CAP);if(copy)n=copy_data(msg,copy,&h.flags);else lose(&ecapture_loss_capture_alloc);}
     if(c)finish(c,h,copy,n,copy&&(n||h.flags),0);
     /* Incomplete records and close_notify return no application bytes and do
      * not consume the capture sequence. Other decrypt errors are explicit gaps. */
-    if(c&&result!=SEC_E_OK&&result!=SEC_E_INCOMPLETE_MESSAGE&&result!=SEC_I_CONTEXT_EXPIRED&&result!=SEC_I_RENEGOTIATE)lose();
+    if(c&&result!=SEC_E_OK&&result!=SEC_E_INCOMPLETE_MESSAGE&&result!=SEC_I_CONTEXT_EXPIRED&&result!=SEC_I_RENEGOTIATE)lose(&ecapture_loss_sspi);
     if(copy){SecureZeroMemory(copy,n);HeapFree(GetProcessHeap(),0,copy);}InterlockedDecrement(&callbacks);SetLastError(error);return result;
 }
 static SECURITY_STATUS WINAPI delete_hook(PCtxtHandle ctx){
@@ -136,9 +149,9 @@ static DWORD WINAPI drain(void *unused){
             CloseHandle(ov.hEvent);if(!ok||got!=4||memcmp(command,"STOP",4))goto failed;
             InterlockedExchange(&active,0);stopping=1;deadline=GetTickCount64()+3000;
         }
-        EnterCriticalSection(&lock);Node *node=first;
+        EnterCriticalSection(&queue_lock);Node *node=first;
         if(node){first=node->next;if(!first)last=NULL;queued-=sizeof(Node)+node->h.length;}
-        LeaveCriticalSection(&lock);
+        LeaveCriticalSection(&queue_lock);
         if(node){
             int ok=write_bounded(&node->h,sizeof(Header))&&write_bounded(node->data,node->h.length);
             SecureZeroMemory(node->data,node->h.length);HeapFree(GetProcessHeap(),0,node);if(!ok)goto failed;
@@ -150,10 +163,11 @@ static DWORD WINAPI drain(void *unused){
         }else WaitForSingleObject(wake,10);
     }
 failed:
-    lose();InterlockedExchange(&active,0);ecapture_status=-9;
-    EnterCriticalSection(&lock);Node *node=first;first=last=NULL;queued=0;
-    while(node){Node *next=node->next;SecureZeroMemory(node->data,node->h.length);HeapFree(GetProcessHeap(),0,node);lose();node=next;}
-    LeaveCriticalSection(&lock);CloseHandle(pipe_handle);return 1;
+    lose(&ecapture_loss_transport);InterlockedExchange(&active,0);ecapture_status=-9;
+    EnterCriticalSection(&queue_lock);Node *node=first;first=last=NULL;queued=0;
+    LeaveCriticalSection(&queue_lock);
+    while(node){Node *next=node->next;SecureZeroMemory(node->data,node->h.length);HeapFree(GetProcessHeap(),0,node);lose(&ecapture_loss_queue_abandoned);node=next;}
+    CloseHandle(pipe_handle);return 1;
 }
 static int install(void *address,void *detour,void **original){
     if(!address)return 0;MEMORY_BASIC_INFORMATION image;
@@ -184,7 +198,7 @@ static DWORD WINAPI initialize(void *unused){
     CloseHandle(ov.hEvent);
     if(!ok||got!=sizeof(config)||memcmp(config.magic,"ECW2",4)||config.kind!=5||config.birth!=birth||config.pid!=GetCurrentProcessId()){ecapture_status=-4;CloseHandle(pipe_handle);return 4;}
     session_lo=config.session_lo;session_hi=config.session_hi;
-    InitializeCriticalSection(&lock);wake=CreateEventW(NULL,FALSE,FALSE,NULL);
+    InitializeCriticalSection(&context_lock);InitializeCriticalSection(&queue_lock);wake=CreateEventW(NULL,FALSE,FALSE,NULL);
     HMODULE lib=LoadLibraryW(L"secur32.dll");
     if(!wake||!lib||MH_Initialize()!=MH_OK){ecapture_status=-5;CloseHandle(pipe_handle);return 5;}
     ok=install((void*)GetProcAddress(lib,"EncryptMessage"),encrypt_hook,(void**)&original_enc)&&
