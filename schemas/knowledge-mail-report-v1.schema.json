@@ -1,0 +1,158 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.knowledge-mail.report/1.0",
+      "default": "transpect.knowledge-mail.report/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "starting_services",
+        "running_codex",
+        "complete",
+        "partial",
+        "unavailable"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "passed": {
+      "default": false,
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "cases": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Cases",
+      "type": "array"
+    },
+    "expected_cases": {
+      "maximum": 9,
+      "minimum": 3,
+      "title": "Expected Cases",
+      "type": "integer"
+    },
+    "controller": {
+      "additionalProperties": true,
+      "title": "Controller",
+      "type": "object"
+    },
+    "real_codex_autonomy": {
+      "title": "Real Codex Autonomy",
+      "type": "boolean"
+    },
+    "codex_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Codex Sha256",
+      "type": "string"
+    },
+    "codex_tool_host_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Codex Tool Host Sha256",
+      "type": "string"
+    },
+    "model": {
+      "title": "Model",
+      "type": "string"
+    },
+    "mail_control": {
+      "title": "Mail Control",
+      "type": "string"
+    },
+    "llm_guard_rerun": {
+      "const": false,
+      "default": false,
+      "title": "Llm Guard Rerun",
+      "type": "boolean"
+    },
+    "etw_rerun": {
+      "const": false,
+      "default": false,
+      "title": "Etw Rerun",
+      "type": "boolean"
+    },
+    "ecapture_rerun": {
+      "const": false,
+      "default": false,
+      "title": "Ecapture Rerun",
+      "type": "boolean"
+    },
+    "external_smtp_delivery": {
+      "const": false,
+      "default": false,
+      "title": "External Smtp Delivery",
+      "type": "boolean"
+    },
+    "proxy_used": {
+      "const": false,
+      "default": false,
+      "title": "Proxy Used",
+      "type": "boolean"
+    },
+    "tls_replaced": {
+      "const": false,
+      "default": false,
+      "title": "Tls Replaced",
+      "type": "boolean"
+    },
+    "service_transport": {
+      "title": "Service Transport",
+      "type": "string"
+    },
+    "scope": {
+      "title": "Scope",
+      "type": "string"
+    },
+    "errors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "services": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Services"
+    },
+    "service_cleanup_errors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Service Cleanup Errors",
+      "type": "array"
+    },
+    "service_cleanup_confirmed": {
+      "default": false,
+      "title": "Service Cleanup Confirmed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "state",
+    "expected_cases",
+    "controller",
+    "real_codex_autonomy",
+    "codex_sha256",
+    "codex_tool_host_sha256",
+    "model",
+    "mail_control",
+    "service_transport",
+    "scope"
+  ],
+  "title": "KnowledgeMailReport",
+  "type": "object"
+}

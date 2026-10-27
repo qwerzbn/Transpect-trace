@@ -6,6 +6,10 @@ import typer
 app = typer.Typer(no_args_is_help=True, help=__doc__)
 from .agents.cli import app as agents_app
 app.add_typer(agents_app, name='agents')
+from .scenarios.cli import app as scenarios_app
+app.add_typer(scenarios_app, name='scenarios')
+from .knowledge_mail.cli import app as knowledge_mail_app
+app.add_typer(knowledge_mail_app, name='knowledge-mail')
 
 
 @app.command('run')

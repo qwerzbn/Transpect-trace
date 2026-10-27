@@ -21,7 +21,7 @@ def verify_collector(path: Path):
 
 
 class CodexBehaviorCollector:
-    def __init__(self, identity, executable, output, *, duration=30):
+    def __init__(self, identity, executable, output, *, duration=30, file_profile='all'):
         from transpect_trace.guard import BINARY_SHA256
         baseline = identity.get('baseline', {})
         image_hash = baseline.get('sha256')
@@ -29,9 +29,12 @@ class CodexBehaviorCollector:
             raise ValueError('Behavior scope requires the fixed Codex baseline')
         if not 1 <= duration <= 300:
             raise ValueError('Duration must be 1..300 seconds')
+        if file_profile not in {'all','io-evidence'}:raise ValueError('Unknown file capture profile')
+        self.file_profile=file_profile
+        self.filtered_file_metadata=0
         from transpect_trace.observe.windows import identity as resolve_identity
         root = ProcessIdentity(pid=identity['pid'], creation_filetime=identity['creation_filetime'], image_sha256=image_hash,image_name='codex.exe')
-        self.index = BehaviorIndex(root, root.key, resolver=resolve_identity)
+        self.index = BehaviorIndex(root, root.key, resolver=resolve_identity,file_access_records=file_profile=='all')
         self.controller_identity = resolve_identity(os.getpid())
         self.output, self.executable, self.duration = Path(output), Path(executable), duration
         self.process = None
@@ -45,6 +48,9 @@ class CodexBehaviorCollector:
                       status_at_unix_ns=time.time_ns(), snapshot_only=True,
                       decoder_fields=self.index.decoder_fields,
                       controller_identity=self.controller_identity,
+                      file_profile=self.file_profile,filtered_file_metadata=self.filtered_file_metadata,
+                      retained_file_events='all_metadata' if self.file_profile=='all' else 'read_write',
+                      processed_file_access_without_history=self.index.filtered_file_access_records,
                       llm_gate_status='independent_not_attested_here', egress_control='not_installed')
         temporary = self.output / 'status.tmp'
         temporary.write_text(json.dumps(status, indent=2) + '\n', encoding='utf-8')
@@ -55,7 +61,9 @@ class CodexBehaviorCollector:
         self.output.mkdir(parents=True, exist_ok=False)
         (self.output/'collector-build.json').write_bytes((self.executable.parent/'build-manifest.json').read_bytes())
         self.persist_status()
-        self.process = subprocess.Popen([str(self.executable), str(self.duration),str(self.index.root.pid)], stdin=subprocess.DEVNULL,
+        argv=[str(self.executable), str(self.duration),str(self.index.root.pid)]
+        if self.file_profile=='io-evidence':argv.append('--io-evidence')
+        self.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=0x08000000)
 
         def read():
@@ -75,6 +83,11 @@ class CodexBehaviorCollector:
                                 continue
                             try:
                                 row = json.loads(line)
+                                if row.get('kind')=='etw.ready' and row.get('file_profile','all')!=self.file_profile:
+                                    self.index.gaps.add('collector_file_profile_mismatch')
+                                if row.get('kind')=='etw.stopped':
+                                    if row.get('file_profile','all')!=self.file_profile:self.index.gaps.add('collector_file_profile_mismatch')
+                                    self.filtered_file_metadata=max(0,int(row.get('filtered_file_metadata',0)))
                                 event = self.index.consume(row)
                             except (ValueError, TypeError, KeyError, AttributeError):
                                 self.index.gaps.add('malformed_collector_record')

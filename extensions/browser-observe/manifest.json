@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Transpect controlled browser observation",
+  "version": "0.1.0",
+  "description": "Observe explicitly enrolled localhost text requests. No blocking or general browsing capture.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuE+Ecf8aWwtQedodRQVeiZT40PnLVMF8AHg4TlmXe4XG/sNNdTkTgsWEj2zBkx40xX1t2E3iQDf/vSRDR4wmilCa+neyaUEXzXGdNweVToIXeahoPUdIq6m/khJJX8bI2YawBzHbQC9JETzy0owGhlrJ8Ebqj77+ZZhnfMSIyKB0D5gI71XDU07L+VLGt0a3/OlhuZM0IDB/J7+Wu9HWArXuOYbhHbJn2nfSNdR49Xc+bQGkcYdxIw6GkultnXCsZkv6WRPSZlvzXdXYDqtyfpU9VTb1gklXpO7v63eeYIUxTnKoC6WES0MZtwIOUgzvGJyQNRHzeEVrJiPONwxTnQIDAQAB",
+  "permissions": ["webRequest", "nativeMessaging", "storage"],
+  "host_permissions": ["https://localhost/*", "https://127.0.0.1/*"],
+  "background": {"service_worker": "worker.js"},
+  "action": {"default_title": "Controlled observation status", "default_popup": "popup.html"}
+}

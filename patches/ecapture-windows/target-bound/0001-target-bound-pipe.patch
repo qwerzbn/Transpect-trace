@@ -1,0 +1,21 @@
+--- a/enhanced_entry_windows.go
++++ b/enhanced_entry_windows.go
+@@ -83,15 +83,9 @@
+ 	if err != nil || expected != birth {
+ 		return errors.New("target_generation_mismatch")
+ 	}
+-	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
+-	if err != nil {
+-		return errors.New("token_identity_unavailable")
+-	}
+-	// An elevated collector may observe its same-user medium-integrity child.
+-	// Keep the user/SYSTEM DACL and explicitly permit medium integrity writes.
+-	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;" + tokenUser.User.Sid.String() + ")S:(ML;;NW;;;ME)")
+-	if err != nil {
+-		return errors.New("pipe_security_unavailable")
++	sd, err := enhancedTargetPipeSecurity(pid, birth)
++	if err != nil {
++		return err
+ 	}
+ 	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+ 	name, _ := windows.UTF16PtrFromString(fmt.Sprintf(`\\.\pipe\ecapture-enhanced-%d-%d`, pid, birth))

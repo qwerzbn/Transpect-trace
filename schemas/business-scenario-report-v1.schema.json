@@ -1,0 +1,1200 @@
+{
+  "$defs": {
+    "CollectorHealth": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "ready": {
+          "default": false,
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "terminal": {
+          "default": false,
+          "title": "Terminal",
+          "type": "boolean"
+        },
+        "identity_verified": {
+          "default": false,
+          "title": "Identity Verified",
+          "type": "boolean"
+        },
+        "lost_events": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Lost Events",
+          "type": "integer"
+        },
+        "errors": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Errors",
+          "type": "integer"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "title": "CollectorHealth",
+      "type": "object"
+    },
+    "DetectionFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "transpect.protect.finding/1.0",
+          "default": "transpect.protect.finding/1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "detector_version": {
+          "title": "Detector Version",
+          "type": "string"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "location": {
+          "title": "Location",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "strength": {
+          "enum": [
+            "weak",
+            "contextual",
+            "exact"
+          ],
+          "title": "Strength",
+          "type": "string"
+        },
+        "sensitivity": {
+          "default": "UNKNOWN",
+          "enum": [
+            "PUBLIC",
+            "INTERNAL",
+            "CONFIDENTIAL",
+            "SECRET",
+            "UNKNOWN"
+          ],
+          "title": "Sensitivity",
+          "type": "string"
+        },
+        "data_types": {
+          "items": {
+            "enum": [
+              "credential",
+              "private_key",
+              "source_code",
+              "personal_information",
+              "registered_text"
+            ],
+            "type": "string"
+          },
+          "title": "Data Types",
+          "type": "array"
+        },
+        "evidence_sha256": {
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registration Id"
+        },
+        "index_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Index Version"
+        }
+      },
+      "required": [
+        "detector_version",
+        "rule_id",
+        "location",
+        "severity",
+        "strength",
+        "data_types",
+        "evidence_sha256"
+      ],
+      "title": "DetectionFinding",
+      "type": "object"
+    },
+    "ScenarioCapabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "system_behavior": {
+          "default": "unknown",
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "System Behavior",
+          "type": "string"
+        },
+        "content_detection": {
+          "default": "unknown",
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "Content Detection",
+          "type": "string"
+        },
+        "propagation": {
+          "default": "unknown",
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "Propagation",
+          "type": "string"
+        },
+        "source_receipt": {
+          "default": "unknown",
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "Source Receipt",
+          "type": "string"
+        },
+        "control": {
+          "const": "not_applicable",
+          "default": "not_applicable",
+          "title": "Control",
+          "type": "string"
+        }
+      },
+      "title": "ScenarioCapabilities",
+      "type": "object"
+    },
+    "ScenarioEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "evidence_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "stage_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Stage Id",
+          "type": "string"
+        },
+        "provenance": {
+          "enum": [
+            "native_io",
+            "etw",
+            "ecapture",
+            "native_request",
+            "source_receipt",
+            "git_object",
+            "client_result",
+            "fixture_truth"
+          ],
+          "title": "Provenance",
+          "type": "string"
+        },
+        "process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScenarioProcess"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "attempt_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Sha256"
+        },
+        "body_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Bytes"
+        },
+        "complete": {
+          "default": false,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "success": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Success"
+        },
+        "object_id": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Id"
+        },
+        "object_location": {
+          "anyOf": [
+            {
+              "enum": [
+                "origin",
+                "sender"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Location"
+        },
+        "observed_blob_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Blob Count"
+        },
+        "content_registration_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Content Registration Ids",
+          "type": "array"
+        },
+        "file_identity": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Identity"
+        },
+        "io_operation": {
+          "anyOf": [
+            {
+              "enum": [
+                "read",
+                "write"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Io Operation"
+        },
+        "io_offset": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Io Offset"
+        },
+        "io_started_qpc": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Io Started Qpc"
+        },
+        "io_completed_qpc": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Io Completed Qpc"
+        },
+        "qpc_frequency": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qpc Frequency"
+        },
+        "event_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "stage_id",
+        "provenance"
+      ],
+      "title": "ScenarioEvidence",
+      "type": "object"
+    },
+    "ScenarioGitObjectScan": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "evidence_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "received_blob_count": {
+          "minimum": 0,
+          "title": "Received Blob Count",
+          "type": "integer"
+        },
+        "complete": {
+          "default": false,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "evidence_id",
+        "received_blob_count"
+      ],
+      "title": "ScenarioGitObjectScan",
+      "type": "object"
+    },
+    "ScenarioObjectDetection": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "object_id": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Object Id",
+          "type": "string"
+        },
+        "body_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Body Sha256",
+          "type": "string"
+        },
+        "body_bytes": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "title": "Body Bytes",
+          "type": "integer"
+        },
+        "evidence_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "detection_status": {
+          "default": "incomplete",
+          "enum": [
+            "matched",
+            "no_match",
+            "incomplete"
+          ],
+          "title": "Detection Status",
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DetectionFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "object_id",
+        "body_sha256",
+        "body_bytes",
+        "evidence_id"
+      ],
+      "title": "ScenarioObjectDetection",
+      "type": "object"
+    },
+    "ScenarioOutbound": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScenarioProcess"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "capture_source": {
+          "enum": [
+            "ecapture",
+            "native_request",
+            "unavailable"
+          ],
+          "title": "Capture Source",
+          "type": "string"
+        },
+        "capture_layer": {
+          "enum": [
+            "tls",
+            "request",
+            "unknown"
+          ],
+          "title": "Capture Layer",
+          "type": "string"
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ],
+          "title": "Completeness",
+          "type": "string"
+        },
+        "body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Sha256"
+        },
+        "body_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Bytes"
+        },
+        "capture_evidence_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Evidence Id"
+        },
+        "receipt_evidence_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Receipt Evidence Id"
+        },
+        "detection_status": {
+          "default": "incomplete",
+          "enum": [
+            "matched",
+            "no_match",
+            "incomplete",
+            "unsupported"
+          ],
+          "title": "Detection Status",
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DetectionFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "source_received": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Received"
+        },
+        "receipt_match": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Receipt Match"
+        },
+        "association_basis": {
+          "default": "unknown",
+          "description": "Ordered hash/length/count pairing is an accounting candidate, not a propagated request identity.",
+          "enum": [
+            "ordered_body_multiset",
+            "unknown",
+            "exact_runtime_id"
+          ],
+          "title": "Association Basis",
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "capture_source",
+        "capture_layer",
+        "completeness"
+      ],
+      "title": "ScenarioOutbound",
+      "type": "object"
+    },
+    "ScenarioProcess": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "role": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Role",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 0,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "creation_filetime": {
+          "exclusiveMinimum": 0,
+          "title": "Creation Filetime",
+          "type": "integer"
+        },
+        "image_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Sha256",
+          "type": "string"
+        },
+        "parent_pid": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Pid"
+        },
+        "parent_creation_filetime": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Creation Filetime"
+        },
+        "membership_basis": {
+          "default": "explicit_registration",
+          "enum": [
+            "explicit_registration",
+            "observed_lineage"
+          ],
+          "title": "Membership Basis",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "pid",
+        "creation_filetime",
+        "image_sha256"
+      ],
+      "title": "ScenarioProcess",
+      "type": "object"
+    },
+    "ScenarioRelation": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "relation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Relation Id",
+          "type": "string"
+        },
+        "left_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Left Id",
+          "type": "string"
+        },
+        "right_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Right Id",
+          "type": "string"
+        },
+        "confidence": {
+          "default": "Unknown",
+          "enum": [
+            "High",
+            "Medium",
+            "Low",
+            "Unknown"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "method": {
+          "enum": [
+            "content_candidate",
+            "observed_file_handoff",
+            "observed_protocol_mapping",
+            "observed_lineage",
+            "git_object_receipt",
+            "timing_candidate"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "byte_level_taint_proof": {
+          "const": false,
+          "default": false,
+          "title": "Byte Level Taint Proof",
+          "type": "boolean"
+        },
+        "unique_source_proven": {
+          "const": false,
+          "default": false,
+          "title": "Unique Source Proven",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "relation_id",
+        "left_id",
+        "right_id",
+        "method"
+      ],
+      "title": "ScenarioRelation",
+      "type": "object"
+    },
+    "ScenarioStage": {
+      "additionalProperties": false,
+      "properties": {
+        "can_enforce": {
+          "const": false,
+          "default": false,
+          "title": "Can Enforce",
+          "type": "boolean"
+        },
+        "stage_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Stage Id",
+          "type": "string"
+        },
+        "participant": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Participant",
+          "type": "string"
+        },
+        "state": {
+          "default": "unknown",
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "required_provenance": {
+          "items": {
+            "enum": [
+              "native_io",
+              "etw",
+              "ecapture",
+              "native_request",
+              "source_receipt",
+              "git_object",
+              "client_result",
+              "fixture_truth"
+            ],
+            "type": "string"
+          },
+          "title": "Required Provenance",
+          "type": "array"
+        },
+        "evidence_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage_id",
+        "participant"
+      ],
+      "title": "ScenarioStage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "transpect.business.report/1.0",
+      "default": "transpect.business.report/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "scenario": {
+      "enum": [
+        "webhook",
+        "git"
+      ],
+      "title": "Scenario",
+      "type": "string"
+    },
+    "case": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Case",
+      "type": "string"
+    },
+    "state": {
+      "default": "unknown",
+      "enum": [
+        "complete",
+        "partial",
+        "unsupported",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "certified": {
+      "default": false,
+      "title": "Certified",
+      "type": "boolean"
+    },
+    "participants": {
+      "items": {
+        "$ref": "#/$defs/ScenarioProcess"
+      },
+      "title": "Participants",
+      "type": "array"
+    },
+    "stages": {
+      "items": {
+        "$ref": "#/$defs/ScenarioStage"
+      },
+      "title": "Stages",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/ScenarioEvidence"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "outbound": {
+      "items": {
+        "$ref": "#/$defs/ScenarioOutbound"
+      },
+      "title": "Outbound",
+      "type": "array"
+    },
+    "git_objects": {
+      "items": {
+        "$ref": "#/$defs/ScenarioObjectDetection"
+      },
+      "title": "Git Objects",
+      "type": "array"
+    },
+    "git_scans": {
+      "items": {
+        "$ref": "#/$defs/ScenarioGitObjectScan"
+      },
+      "title": "Git Scans",
+      "type": "array"
+    },
+    "relations": {
+      "items": {
+        "$ref": "#/$defs/ScenarioRelation"
+      },
+      "title": "Relations",
+      "type": "array"
+    },
+    "health": {
+      "patternProperties": {
+        "^[A-Za-z0-9_.:-]+$": {
+          "$ref": "#/$defs/CollectorHealth"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 128,
+        "minLength": 1
+      },
+      "title": "Health",
+      "type": "object"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/ScenarioCapabilities"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9_.:-]+$",
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "byte_level_taint_proof": {
+      "const": false,
+      "default": false,
+      "title": "Byte Level Taint Proof",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session_id",
+    "scenario",
+    "case"
+  ],
+  "title": "BusinessScenarioReport",
+  "type": "object"
+}

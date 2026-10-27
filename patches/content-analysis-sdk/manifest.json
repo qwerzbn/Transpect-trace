@@ -1,0 +1,46 @@
+{
+  "schema": "transpect.vendor.content-analysis-sdk/1.0",
+  "upstream": "https://github.com/chromium/content_analysis_sdk.git",
+  "commit": "2a8191af30a4d1f591e2f758e595bdeea139e93a",
+  "archive_url": "https://github.com/chromium/content_analysis_sdk/archive/2a8191af30a4d1f591e2f758e595bdeea139e93a.tar.gz",
+  "archive_sha256": "53823109c5e44c51dfcf64640f5a4eaef3ab27745488515d5bafcb885e42e659",
+  "license": "BSD-3-Clause",
+  "license_sha256": "7340f764102806e7e96b80a153a23debafb83dff600f08c27a84c6addefcc93f",
+  "toolchain": {
+    "vcpkg_commit": "817892b0ecbc6af994dd6df999c73faf795adbf2",
+    "triplet": "x64-windows",
+    "packages": [
+      "protobuf"
+    ]
+  },
+  "source_sha256": {
+    "CMakeLists.txt": "ddb92694ec00eabd98a93a0bce6432232adea07343286dfa75df9e8b9480ed9a",
+    "LICENSE": "7340f764102806e7e96b80a153a23debafb83dff600f08c27a84c6addefcc93f",
+    "proto/content_analysis/sdk/analysis.proto": "c694bc0f1c59d9c975c0f21afdec10e09eb9f4f427fea1556811321464608e05",
+    "agent/include/content_analysis/sdk/analysis_agent.h": "9f4cf6fceed199ddd8b08ef699d44b1b0747fd5e8b59ff2fc75613fa706df695",
+    "agent/include/content_analysis/sdk/result_codes.h": "2701fd16628f17c16455a049a55627d29929ec15af5ed8409d052aa75356fd89",
+    "agent/include/content_analysis/sdk/result_codes.inc": "162a9c04c6914e84dfb3084a70793887d278a34f41db01ce38775e1c8a81277c",
+    "agent/src/agent_base.cc": "e920637ef7eec2d92c934c467dcaa20e19d96983233f904800f7c76353ce87b3",
+    "agent/src/agent_base.h": "bfa763abd96c86ad56ba4dc2996fb885510edf51eed35843396840ce36cff898",
+    "agent/src/agent_utils_win.cc": "eba950662dd171848e8038b302fa2649a3c97fc6c21df9f7c0f026892b738a53",
+    "agent/src/agent_utils_win.h": "4a46d1f5d538ebd0e1d13925a7f8e450f67b2376833c58f5a878e2ec98568933",
+    "agent/src/agent_win.cc": "2f1a468028c7473491fb5fbab6f42ed5a2bd8ff918a08354fa763160897eac42",
+    "agent/src/agent_win.h": "fe6d8b04adcc87f4f324884fc486dbd5cbe991de3e9e9f760f62a2a46a605ddf",
+    "agent/src/event_base.cc": "b2a197dbb38239f077300207958fa6d6399eff61f038fb20c5ad896b342a9bfe",
+    "agent/src/event_base.h": "2612c71160db8096db11f1002da9e0f6182178c6251b154e18e54d85c48132f7",
+    "agent/src/event_win.cc": "643a62419bf4fee495a53d9bf4790c006b1b4d318e41d9fc7e104f8444dbacd9",
+    "agent/src/event_win.h": "fdf119c7c972e4e51451a1b502124390a00a969aab06112e6134ef533078c5b9",
+    "agent/src/scoped_print_handle_base.cc": "18df5b5235318123df91bce7da359f545fa568ef222e54e1a42c28835f5a441e",
+    "agent/src/scoped_print_handle_base.h": "622832a3a213893f3b015c973ec6d4f3fd4a3d382d6aff37dc5191920978ab76",
+    "agent/src/scoped_print_handle_win.cc": "4a8bafaa18fcc2e31687101d04f22bdffe97399fe2d2ecb6e0bdc19e3cb77fb5",
+    "agent/src/scoped_print_handle_win.h": "6808add3a5003fc2adddc11e71325473c7dffc2788878b07655a420bbab830ab",
+    "common/utils_win.cc": "f23e7665f43bc76d56237aa4d6282ae251ff96e42bd98135a888c45b99514747",
+    "common/utils_win.h": "f8db3034e484721f1c28fc95e5344f2ebc7c9756d82972dd841aa596dfc8dc06",
+    "browser/include/content_analysis/sdk/analysis_client.h": "1d2f584c4b6eb32a46181020e7cb3826a85e5aa5904137f9941c0490d3417342",
+    "browser/src/client_base.cc": "ec8f13f7765aeba4ea074a753c25a9dbcdf232d51a29052779f622038b3c5b28",
+    "browser/src/client_base.h": "ac143358e80cb2e07bf260544c0b6098d3ca192fa190631b263e9c233fb19cf7",
+    "browser/src/client_win.cc": "14906e33acb5f64bfc491992a753197893cd1ade744fa42ad32e3d22ea6c2a88",
+    "browser/src/client_win.h": "247f5fd8ebd2c48070279262b11e1c67ace39927ab0f4d1444cae2b23bf794f7"
+  },
+  "selection_reason": "Includes the Windows named-pipe response truncation fix for responses larger than 4 KiB and predates the broken demo client file-size call in 0a0e7ea516249e786d5a8884552bbd6e163d89cb."
+}

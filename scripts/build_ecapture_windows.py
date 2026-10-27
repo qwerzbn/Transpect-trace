@@ -1,7 +1,7 @@
 """Reproducible, pinned upstream Windows build. Requires a local Go toolchain."""
 import argparse,hashlib,json,os,subprocess,sys,shutil,tempfile
 from pathlib import Path
-from transpect_trace.observe.ecapture import PIN
+from transpect_trace.observe.ecapture import PIN, target_bound_patch_manifest
 from _build_support import ROOT, enter_repository
 
 
@@ -10,15 +10,17 @@ def main():
     parser.add_argument('--source',type=Path,default=ROOT/'.external/ecapture-windows')
     parser.add_argument('--go',type=Path,default=ROOT/'.external/toolchains/go/bin/go.exe')
     parser.add_argument('--variant',choices=['upstream','enhanced'],default='upstream')
+    parser.add_argument('--target-bound-pipe',action='store_true',help='Opt-in target-bound audit pipe overlay; requires enhanced variant.')
     parser.add_argument('--output',type=Path,help='Isolated artifact directory; defaults to the existing build location.')
     args=parser.parse_args();source=args.source.resolve()
+    if args.target_bound_pipe and args.variant!='enhanced':parser.error('--target-bound-pipe requires --variant enhanced')
     args.go=args.go.resolve()
     output=(args.output or ROOT/('build/observe' if args.variant=='upstream' else 'build/observe/ecapture-enhanced')).resolve()
     enter_repository();output.mkdir(parents=True,exist_ok=True)
     actual=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
     if actual!=PIN['commit']:raise RuntimeError('eCapture source pin mismatch')
     if subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True).strip():raise RuntimeError('eCapture source must be unmodified')
-    patches={};temp=None
+    patches={};overlays={};temp=None
     if args.variant=='enhanced':
         patch_root=Path('patches/ecapture-windows').resolve()
         patch_manifest=json.loads((patch_root/'manifest.json').read_text(encoding='utf-8'))
@@ -37,8 +39,21 @@ def main():
         shutil.copyfile(patch_root/'enhanced/enhanced_entry_windows.go',derived/'enhanced_entry_windows.go')
         shutil.copyfile(patch_root/'enhanced/enhanced_elevation_windows.go',derived/'enhanced_elevation_windows.go')
         shutil.copyfile(patch_root/'enhanced/schannel_hook.c',derived/'contrib/schannel_hook/schannel_hook.c')
+        if args.target_bound_pipe:
+            overlay=target_bound_patch_manifest(patch_root)
+            folder=patch_root/'target-bound'
+            change=folder/'0001-target-bound-pipe.patch'
+            subprocess.run(['git','apply','--check',str(change)],cwd=derived,check=True)
+            subprocess.run(['git','apply',str(change)],cwd=derived,check=True)
+            for name in ('target_pipe_windows.go','target_pipe_windows_test.go'):
+                shutil.copyfile(folder/name,derived/name)
+            overlays=overlay['sha256']
         source=derived
     env=dict(os.environ,CGO_ENABLED='0',GOTOOLCHAIN='local')
+    if overlays:
+        test_env={k:v for k,v in env.items() if not k.startswith('TTRACE_ECAPTURE_')}
+        subprocess.run([str(args.go.resolve()),'test','-tags','windows','-run','^TestTargetBound','-count=1','.'],
+                       cwd=source,env=test_env,check=True)
     subprocess.run([str(args.go.resolve()),'build','-trimpath','-buildvcs=false','-tags','windows','-o',str(output/'ecapture.exe'),'.'],cwd=source,env=env,check=True)
     dll=source/'contrib/schannel_hook/schannel_hook.c'
     extra=[]
@@ -64,6 +79,7 @@ def main():
               'companion_source_sha256':hashlib.sha256(dll.read_bytes()).hexdigest(),
               'artifacts_sha256':{name:hashlib.sha256((output/name).read_bytes()).hexdigest() for name in artifacts}}
     if patches:manifest.update(transport='restricted-local-named-pipe',connection_identity='SSPI-context-generation',text_preview_limit=None)
+    if overlays:manifest.update(patch_set='target-bound-v1',overlays_sha256=overlays)
     (output/'ecapture-build.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print(json.dumps(manifest,indent=2))
     if temp:temp.cleanup()

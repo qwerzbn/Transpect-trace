@@ -74,7 +74,7 @@ def test_agent_commands_preserve_flow_commands_and_report_is_read_only(tmp_path)
     from transpect_trace.cli import app
     from transpect_trace.flow.agents.cli import read_report
     flow = get_command(app).commands['flow']
-    assert set(flow.commands) == {'run','report','status','agents'}
+    assert set(flow.commands) == {'run','report','status','agents','scenarios','knowledge-mail'}
     assert set(flow.commands['agents'].commands) == {'run','report','status'}
     value = {'schema_version':'transpect.agent.report/1.0','can_enforce':False,'session':{'status':'partial'}}
     original = json.dumps(value)

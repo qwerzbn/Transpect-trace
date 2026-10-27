@@ -86,3 +86,44 @@ def test_build_hash_and_observation_only_contract(tmp_path):
     manifest.write_text(json.dumps(data))
     with pytest.raises(ValueError, match='protocol_mismatch'):
         validate_build(dll, manifest)
+
+
+@pytest.mark.parametrize('stage,key', [('before', 'creation_filetime'), ('after', 'creation_filetime'),
+                                     ('before', 'image_sha256'), ('after', 'image_sha256')])
+def test_restricted_audit_pipe_rejects_changed_target_before_acl_creation(tmp_path, monkeypatch, stage, key):
+    from transpect_trace.flow import native
+    from transpect_trace.guard import pipe
+    from transpect_trace.observe import windows
+    from transpect_trace.behavior import native_egress
+    subject = {'pid': 42, 'creation_filetime': 12345, 'image_sha256': 'a' * 64}
+    identities = [dict(subject), dict(subject)]
+    identities[0 if stage == 'before' else 1][key] = 12346 if key == 'creation_filetime' else 'b' * 64
+    values = iter(identities)
+    monkeypatch.setattr(native, 'validate_build', lambda *args: {'audit_transport': 'FIO1-ACK1'})
+    monkeypatch.setattr(pipe, 'windows_api', lambda: object())
+    monkeypatch.setattr(windows, 'identity', lambda pid: next(values))
+    monkeypatch.setattr(native_egress, 'restricted_process_sids', lambda pid: ['S-1-5-12'])
+    monkeypatch.setattr(native_egress, 'descendant_pipe_security', lambda *args: pytest.fail('changed target received audit ACL'))
+    monkeypatch.setattr(pipe, 'pipe_security', lambda *args: pytest.fail('restricted path silently fell back'))
+    with pytest.raises(ValueError, match='native_io_restricted_subject_changed'):
+        native.NativeIOCollector(subject, tmp_path / 'observer.dll', tmp_path / 'build.json', lambda row: None,
+                                  scopes=[{'role': 'source', 'path': str(tmp_path / 'source.json')}],
+                                  allow_restricted_subject=True)
+
+
+def test_default_native_audit_pipe_does_not_enable_restricted_subject_access(tmp_path, monkeypatch):
+    from transpect_trace.flow import native
+    from transpect_trace.guard import pipe
+    from transpect_trace.behavior import native_egress
+    subject = {'pid': 42, 'creation_filetime': 12345, 'image_sha256': 'a' * 64}
+    monkeypatch.setattr(native, 'validate_build', lambda *args: {'audit_transport': 'FIO1-ACK1'})
+    monkeypatch.setattr(pipe, 'windows_api', lambda: object())
+    monkeypatch.setattr(native_egress, 'restricted_process_sids', lambda *args: pytest.fail('default unexpectedly inspected restricted token'))
+
+    def ordinary_security(_):
+        raise RuntimeError('ordinary_current_user_acl_selected')
+
+    monkeypatch.setattr(pipe, 'pipe_security', ordinary_security)
+    with pytest.raises(RuntimeError, match='ordinary_current_user_acl_selected'):
+        native.NativeIOCollector(subject, tmp_path / 'observer.dll', tmp_path / 'build.json', lambda row: None,
+                                  scopes=[{'role': 'source', 'path': str(tmp_path / 'source.json')}])

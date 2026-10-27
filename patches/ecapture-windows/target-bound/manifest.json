@@ -1,0 +1,11 @@
+{
+  "patch_set": "target-bound-v1",
+  "base_commit": "7fb8347b7a3c28d2a094e35af38b1c471d194ebf",
+  "protocol": "ECW2",
+  "base_patch_manifest_sha256": "9ba113f8fdb3ac4c3a7b2b0408ac509fcc3bd8c32a5157957d6629efd8d6e377",
+  "sha256": {
+    "0001-target-bound-pipe.patch": "2c6512c1e8302bb02865825dfe5b0d10a83073e2a4718c82d59f288905389de3",
+    "target_pipe_windows.go": "99b03b5657749c64e9c56b1f77cbfe0504e06aca8882027a1e0a50a488ff349f",
+    "target_pipe_windows_test.go": "3feae22f7e5337d5cc8aabf201bcf80279447b517ff1fa4756a1088d6165a3b3"
+  }
+}

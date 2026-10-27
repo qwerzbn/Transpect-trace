@@ -1,0 +1,30 @@
+{
+  "schema": "transpect.chrome.enterprise-policy-example/1.0",
+  "policy_name": "OnBulkDataEntryEnterpriseConnector",
+  "delivery": "chrome_enterprise_core_cloud_only",
+  "prototype_only": true,
+  "notes": [
+    "This document records the intended cloud policy value; it is not a registry import file.",
+    "local_user_agent is a Chromium test provider and is not a production provider identity.",
+    "minimum_data_size is one byte for controlled credential and short-secret tests.",
+    "A managed Chrome enrollment and administrator-delivered cloud policy are required."
+  ],
+  "value": [
+    {
+      "service_provider": "local_user_agent",
+      "enable": [
+        {
+          "url_list": [
+            "https://chatgpt.com/*"
+          ],
+          "tags": [
+            "dlp"
+          ]
+        }
+      ],
+      "block_until_verdict": 1,
+      "default_action": "block",
+      "minimum_data_size": 1
+    }
+  ]
+}

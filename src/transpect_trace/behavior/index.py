@@ -11,8 +11,10 @@ from .models import BehaviorEvent, ProcessIdentity
 
 
 class BehaviorIndex:
-    def __init__(self, root: ProcessIdentity, run_id: str, *, limit=100_000, resolver=None):
+    def __init__(self, root: ProcessIdentity, run_id: str, *, limit=100_000, resolver=None, file_access_records=True):
         self.root, self.run_id, self.limit, self.resolver = root, run_id, limit, resolver
+        self.file_access_records=file_access_records
+        self.filtered_file_access_records=0
         self.generations = {root.key: dict(subject=root, parent=None, start=0, end=None)}
         self.events = []
         self.files = {}
@@ -158,6 +160,12 @@ class BehaviorIndex:
                     self.gaps.add('file_map_capacity_exceeded')
             path = self.files.get(key)
             kind = 'file.read' if 'read' in task else 'file.write' if 'write' in task else 'file.access'
+            if kind=='file.access' and not self.file_access_records:
+                # Keep the name/lifetime map for subsequent read/write facts;
+                # this explicit profile persists I/O rather than every metadata query.
+                self.filtered_file_access_records+=1
+                if 'close' in task or 'cleanup' in task:self.files.pop(key,None)
+                return None
             # Provider-specific opcode 67 is not assumed to mean a successful read.
             result = self._emit(kind, subject, tick, 'etw_file_metadata', path=path,
                                 reported_size=max(0, number(props.get('IOSize',props.get('IoSize')))) if 'IoSize' in props or 'IOSize' in props else None,

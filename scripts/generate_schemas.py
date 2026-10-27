@@ -20,9 +20,31 @@ from transpect_trace.flow.models import CrossApplicationSession, TransferObserva
 from transpect_trace.flow.manifest import FlowManifest
 from transpect_trace.flow.agents.manifest import AgentFlowManifest
 from transpect_trace.flow.agents.models import AgentFlowSession, AgentMessageObservation, AgentPropagationRelation
+from transpect_trace.flow.scenarios.manifest import BusinessScenarioManifest
+from transpect_trace.flow.scenarios.models import BusinessScenarioReport
+from transpect_trace.flow.browser.models import BrowserRequestObservation
+from transpect_trace.flow.knowledge_mail.models import KnowledgeMailReport
+from transpect_trace.protect.content_analysis import (
+    ContentAnalysisAudit,
+    ContentAnalysisPolicy,
+    ContentAnalysisRequest,
+    ContentAnalysisVerdict,
+)
 
 
 def generated_schemas():
+    yield 'knowledge-mail-report-v1.schema.json', KnowledgeMailReport.model_json_schema(mode='serialization')
+    for name, model in (
+        ("chrome-content-request-v1.schema.json", ContentAnalysisRequest),
+        ("chrome-content-verdict-v1.schema.json", ContentAnalysisVerdict),
+        ("chrome-content-audit-v1.schema.json", ContentAnalysisAudit),
+        ("chrome-content-policy-v1.schema.json", ContentAnalysisPolicy),
+    ):
+        yield name, model.model_json_schema(mode="serialization")
+    for name, model in (("business-scenario-manifest-v1.schema.json", BusinessScenarioManifest),
+                        ("business-scenario-report-v1.schema.json", BusinessScenarioReport),
+                        ("browser-request-observation-v1.schema.json", BrowserRequestObservation)):
+        yield name, model.model_json_schema(mode='serialization')
     for name, model in (("agent-session-v1.schema.json", AgentFlowSession),
                         ("agent-message-v1.schema.json", AgentMessageObservation),
                         ("agent-relation-v1.schema.json", AgentPropagationRelation),

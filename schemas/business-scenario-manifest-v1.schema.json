@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "FrozenFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "format": "path",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "FrozenFile",
+      "type": "object"
+    },
+    "ScenarioParticipant": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Role",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "real_application",
+            "controlled_service",
+            "test_program"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "executable_key": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable Key"
+        }
+      },
+      "required": [
+        "role",
+        "kind"
+      ],
+      "title": "ScenarioParticipant",
+      "type": "object"
+    },
+    "ScenarioStep": {
+      "additionalProperties": false,
+      "properties": {
+        "step_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Step Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "source_export",
+            "tool_execution",
+            "transform",
+            "upload",
+            "commit",
+            "push"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "participant": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Participant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "kind",
+        "participant"
+      ],
+      "title": "ScenarioStep",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.business.manifest/1.0",
+      "default": "transpect.business.manifest/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scenario": {
+      "enum": [
+        "webhook",
+        "git"
+      ],
+      "title": "Scenario",
+      "type": "string"
+    },
+    "case": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Case",
+      "type": "string"
+    },
+    "fake_data_only": {
+      "const": true,
+      "title": "Fake Data Only",
+      "type": "boolean"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "executables": {
+      "patternProperties": {
+        "^[A-Za-z0-9_.:-]+$": {
+          "$ref": "#/$defs/FrozenFile"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 128,
+        "minLength": 1
+      },
+      "title": "Executables",
+      "type": "object"
+    },
+    "build_inputs": {
+      "patternProperties": {
+        "^[A-Za-z0-9_.:-]+$": {
+          "$ref": "#/$defs/FrozenFile"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 128,
+        "minLength": 1
+      },
+      "title": "Build Inputs",
+      "type": "object"
+    },
+    "source": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "content_index": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "certificate": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "private_key": {
+      "$ref": "#/$defs/FrozenFile"
+    },
+    "output": {
+      "format": "path",
+      "title": "Output",
+      "type": "string"
+    },
+    "participants": {
+      "items": {
+        "$ref": "#/$defs/ScenarioParticipant"
+      },
+      "title": "Participants",
+      "type": "array"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/ScenarioStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "timeout_seconds": {
+      "default": 90,
+      "maximum": 180,
+      "minimum": 30,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    },
+    "git_tls_backend": {
+      "default": "default",
+      "enum": [
+        "default",
+        "schannel"
+      ],
+      "title": "Git Tls Backend",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scenario",
+    "case",
+    "fake_data_only",
+    "executables",
+    "build_inputs",
+    "source",
+    "content_index",
+    "certificate",
+    "private_key",
+    "output"
+  ],
+  "title": "BusinessScenarioManifest",
+  "type": "object"
+}

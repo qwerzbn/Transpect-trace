@@ -84,6 +84,26 @@ uv run --no-sync ttrace guard codex --codex $codexExe --policy-file $policyFile 
 
 并发、重试、改写和采集停止的复现入口见 [复杂联动验收](docs/development/flow-linkage.md)。
 
+真实 PowerShell Webhook、Git 仓库与浏览器请求观察的隔离实验见 [多应用业务场景开发说明](docs/development/business-scenarios.md)。
+
+Chrome 文件上传与粘贴文本可使用官方 Content Analysis SDK 原型；它不依赖扩展、调试模式、代理或 TLS 替换。先准备固定的上游源码，再构建并运行本地 Agent：
+
+```powershell
+git clone https://github.com/chromium/content_analysis_sdk .external/content-analysis-sdk
+git -C .external/content-analysis-sdk checkout --detach 2a8191af30a4d1f591e2f758e595bdeea139e93a
+git clone https://github.com/microsoft/vcpkg .external/vcpkg
+git -C .external/vcpkg checkout --detach 817892b0ecbc6af994dd6df999c73faf795adbf2
+
+uv run --no-sync python scripts/build_content_analysis_agent.py --prepare
+uv run --no-sync ttrace protect content-agent run
+```
+
+普通 Chrome 自动触发还需要 Chrome Enterprise Core 注册，并由管理员下发 `OnFileAttachedEnterpriseConnector` 与 `OnBulkDataEntryEnterpriseConnector` 云策略；仓库中的 `deploy/protect/chrome-content-*.example.json` 只记录策略意图，不会修改本机策略。示例使用的 `local_user_agent` 仅供受控验证，生产启用还需要正式支持／接入的服务提供方（或受管 Chromium 部署）。可先运行 `scripts/probe_content_analysis_sdk.py` 验证本地 SDK、策略和阻断协议，该结果不等于真实 Chrome 已启用。
+
+**应用 A 读改文件、独立应用 B 读取并上传**可通过 [文件修改与上传复现实验](scripts/probe_file_modify_upload.py) 验证。该实验使用真实 PowerShell 与 Python HTTPX，通过普通文件交接；B 的请求层 Native Gate 执行内容拒绝。
+
+**知识库读取与邮件发送**使用真实 BookStack、官方 Codex 和 Mailpit，入口为 `ttrace flow knowledge-mail run`。准备、Native 构建和普通／敏感／脱敏用例见 [运行说明](docs/development/knowledge-mail.md)。
+
 按需要构建；基础 Guard 不依赖下面三个 Native 组件。
 
 ```powershell

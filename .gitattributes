@@ -1,3 +1,4 @@
 # Preserve upstream bytes: the native builder verifies vendored SHA-256 hashes.
 native/guard/third_party/** -text whitespace=-blank-at-eof,cr-at-eol
 patches/ecapture-windows/enhanced/** -text
+patches/ecapture-windows/target-bound/*.patch -text whitespace=-space-before-tab

@@ -3,6 +3,8 @@ from pathlib import Path
 from uuid import uuid4
 import typer
 app=typer.Typer(no_args_is_help=True,help='Explicit Native adapters; uncertified channels refuse activation.')
+from .content_analysis.cli import app as content_agent_app
+app.add_typer(content_agent_app,name='content-agent')
 
 @app.command('run',context_settings={'allow_extra_args':True,'ignore_unknown_options':True})
 def run(ctx:typer.Context,channel:str=typer.Option(...),

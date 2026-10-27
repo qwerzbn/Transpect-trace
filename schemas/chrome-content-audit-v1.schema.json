@@ -1,0 +1,151 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.chrome.content.audit/1.0",
+      "default": "transpect.chrome.content.audit/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "attempt_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "request_token_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Request Token Sha256",
+      "type": "string"
+    },
+    "user_action_id_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Action Id Sha256"
+    },
+    "connector": {
+      "enum": [
+        "FILE_ATTACHED",
+        "BULK_DATA_ENTRY"
+      ],
+      "title": "Connector",
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "UNKNOWN",
+        "CLIPBOARD_PASTE",
+        "DRAG_AND_DROP",
+        "FILE_PICKER_DIALOG"
+      ],
+      "title": "Reason",
+      "type": "string"
+    },
+    "destination_host": {
+      "title": "Destination Host",
+      "type": "string"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "encoding_state": {
+      "enum": [
+        "utf8",
+        "binary",
+        "unsupported",
+        "unknown"
+      ],
+      "title": "Encoding State",
+      "type": "string"
+    },
+    "body_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Body Sha256",
+      "type": "string"
+    },
+    "body_bytes": {
+      "maximum": 1048576,
+      "minimum": 0,
+      "title": "Body Bytes",
+      "type": "integer"
+    },
+    "decision": {
+      "enum": [
+        "ALLOW",
+        "BLOCK",
+        "UNKNOWN"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "allow",
+        "block"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "verdict_reason": {
+      "title": "Verdict Reason",
+      "type": "string"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "rule_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rule Ids",
+      "type": "array"
+    },
+    "registration_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Registration Ids",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "request_token_sha256",
+    "connector",
+    "reason",
+    "destination_host",
+    "completeness",
+    "encoding_state",
+    "body_sha256",
+    "body_bytes",
+    "decision",
+    "action",
+    "verdict_reason",
+    "policy_version"
+  ],
+  "title": "ContentAnalysisAudit",
+  "type": "object"
+}

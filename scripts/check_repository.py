@@ -65,14 +65,18 @@ def check(root=ROOT,with_local_evidence=False):
     registered=sorted(get_command(app).commands)
     flow_commands=get_command(app).commands['flow'].commands
     agent_commands=sorted(flow_commands['agents'].commands) if 'agents' in flow_commands else []
+    scenario_commands=sorted(flow_commands['scenarios'].commands) if 'scenarios' in flow_commands else []
     links=local_links(root)
     evidence=evidence_paths(root) if with_local_evidence else []
     passed=not missing and not forbidden and all(ignored.values()) and entrypoints==expected and {'guard','observe','protect','behavior','flow'}==set(registered)
     passed=passed and not links['missing'] and all(r['exists'] for r in evidence)
-    passed=passed and {'run','status','report','agents'}==set(flow_commands) and agent_commands==['report','run','status']
+    mail_commands=sorted(flow_commands['knowledge-mail'].commands) if 'knowledge-mail' in flow_commands else []
+    passed=passed and {'run','status','report','agents','scenarios','knowledge-mail'}==set(flow_commands) and agent_commands==['report','run','status'] and scenario_commands==['report','run','status'] and mail_commands==['report','run','status']
     return {'passed':passed,'missing_directories':missing,'forbidden_tracked_paths':forbidden,
             'ignore_checks':ignored,'entrypoints':entrypoints,'cli_commands':registered,
-            'flow_commands':sorted(flow_commands),'agent_flow_commands':agent_commands,'links':links,
+            'flow_commands':sorted(flow_commands),'agent_flow_commands':agent_commands,
+            'business_scenario_commands':scenario_commands,'links':links,
+            'knowledge_mail_commands':mail_commands,
             'evidence_paths':evidence,'local_evidence_checked':with_local_evidence,
             'runtime_capture_certified':False}
 

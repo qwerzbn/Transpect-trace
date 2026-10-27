@@ -66,6 +66,20 @@ def _dll_initialization_snapshot(subject,dll,expected_sha256):
     except (OSError,ValueError,KeyError,StopIteration):return unavailable
 
 
+def target_bound_patch_manifest(patch_root):
+    """Validate the additive, opt-in patch without changing the old base pin."""
+    import json,hashlib
+    folder=patch_root/'target-bound'
+    value=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
+    expected={'0001-target-bound-pipe.patch','target_pipe_windows.go','target_pipe_windows_test.go'}
+    if (value.get('patch_set')!='target-bound-v1' or value.get('base_commit')!=PIN['commit'] or
+        value.get('protocol')!='ECW2' or set(value.get('sha256',{}))!=expected or
+        value.get('base_patch_manifest_sha256')!=hashlib.sha256((patch_root/'manifest.json').read_bytes()).hexdigest() or
+        any(hashlib.sha256((folder/name).read_bytes()).hexdigest()!=want for name,want in value['sha256'].items())):
+        raise ValueError('eCapture target-bound overlay identity mismatch')
+    return value
+
+
 def verify_build(executable):
     import json,hashlib
     from pathlib import Path
@@ -88,6 +102,12 @@ def verify_build(executable):
         if (pin.get('base_commit')!=PIN['commit'] or manifest.get('protocol')!=PROTOCOL or manifest.get('patches_sha256')!=pin['sha256'] or
             any(hashlib.sha256((patch_root/name).read_bytes()).hexdigest()!=want for name,want in pin['sha256'].items())):
             raise ValueError('eCapture enhanced patch identity mismatch')
+    if 'patch_set' in manifest or 'overlays_sha256' in manifest:
+        if variant!='enhanced' or manifest.get('patch_set')!='target-bound-v1':
+            raise ValueError('eCapture overlay patch set unsupported')
+        overlay=target_bound_patch_manifest(Path(__file__).resolve().parents[3]/'patches/ecapture-windows')
+        if manifest.get('overlays_sha256')!=overlay['sha256']:
+            raise ValueError('eCapture target-bound build identity mismatch')
     return manifest
 
 

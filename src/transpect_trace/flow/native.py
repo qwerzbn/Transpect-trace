@@ -81,7 +81,7 @@ def validate_build(dll: Path, build_manifest: Path) -> dict:
 
 
 class NativeIOCollector:
-    def __init__(self, subject: dict, dll: Path, build_manifest: Path, callback, *, scopes: list[dict]):
+    def __init__(self, subject: dict, dll: Path, build_manifest: Path, callback, *, scopes: list[dict], allow_restricted_subject=False):
         from transpect_trace.guard.pipe import windows_api, pipe_security
         self.subject = dict(subject)
         self.dll = Path(dll).resolve()
@@ -106,7 +106,20 @@ class NativeIOCollector:
         paths = [entry['path'].encode('utf-16-le').ljust(2048, b'\0') for entry in self.scopes]
         self.config = struct.pack('<4sIQ', b'FIC1', len(paths), subject['creation_filetime']) + b''.join(paths).ljust(8192, b'\0')
         self.k = windows_api()
-        self.security = pipe_security(self.k)
+        if allow_restricted_subject:
+            from transpect_trace.observe.windows import identity
+            from transpect_trace.behavior.native_egress import descendant_pipe_security, restricted_process_sids
+            before = identity(subject['pid'])
+            sids = restricted_process_sids(subject['pid'])
+            after = identity(subject['pid'])
+            if any(before[key] != subject[key] or after[key] != subject[key]
+                   for key in ('creation_filetime', 'image_sha256')):
+                raise ValueError('native_io_restricted_subject_changed')
+            # Audit endpoint only; target sandbox/token stays unchanged. The
+            # existing handshake still checks the exact peer PID and birth.
+            self.security = descendant_pipe_security(self.k, sids)
+        else:
+            self.security = pipe_security(self.k)
         self.name = rf"\\.\pipe\ttrace-flow-io-{subject['pid']}-{subject['creation_filetime']}"
         self.ready = threading.Event()
         self.terminal = threading.Event()

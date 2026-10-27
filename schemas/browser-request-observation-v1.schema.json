@@ -1,0 +1,349 @@
+{
+  "$defs": {
+    "DetectionFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "transpect.protect.finding/1.0",
+          "default": "transpect.protect.finding/1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "detector_version": {
+          "title": "Detector Version",
+          "type": "string"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "location": {
+          "title": "Location",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "strength": {
+          "enum": [
+            "weak",
+            "contextual",
+            "exact"
+          ],
+          "title": "Strength",
+          "type": "string"
+        },
+        "sensitivity": {
+          "default": "UNKNOWN",
+          "enum": [
+            "PUBLIC",
+            "INTERNAL",
+            "CONFIDENTIAL",
+            "SECRET",
+            "UNKNOWN"
+          ],
+          "title": "Sensitivity",
+          "type": "string"
+        },
+        "data_types": {
+          "items": {
+            "enum": [
+              "credential",
+              "private_key",
+              "source_code",
+              "personal_information",
+              "registered_text"
+            ],
+            "type": "string"
+          },
+          "title": "Data Types",
+          "type": "array"
+        },
+        "evidence_sha256": {
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "registration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registration Id"
+        },
+        "index_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Index Version"
+        }
+      },
+      "required": [
+        "detector_version",
+        "rule_id",
+        "location",
+        "severity",
+        "strength",
+        "data_types",
+        "evidence_sha256"
+      ],
+      "title": "DetectionFinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "transpect.browser.request/1.0",
+      "default": "transpect.browser.request/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "can_enforce": {
+      "const": false,
+      "default": false,
+      "title": "Can Enforce",
+      "type": "boolean"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "browser_run_id": {
+      "title": "Browser Run Id",
+      "type": "string"
+    },
+    "extension_session_id": {
+      "title": "Extension Session Id",
+      "type": "string"
+    },
+    "request_id_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Request Id Sha256",
+      "type": "string"
+    },
+    "request_stage": {
+      "minimum": 1,
+      "title": "Request Stage",
+      "type": "integer"
+    },
+    "tab_id": {
+      "title": "Tab Id",
+      "type": "integer"
+    },
+    "frame_id": {
+      "title": "Frame Id",
+      "type": "integer"
+    },
+    "document_id_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Document Id Sha256"
+    },
+    "network_process": {
+      "default": null,
+      "title": "Network Process",
+      "type": "null"
+    },
+    "process_binding": {
+      "const": "unknown",
+      "default": "unknown",
+      "title": "Process Binding",
+      "type": "string"
+    },
+    "capture_layer": {
+      "const": "browser_request_body",
+      "default": "browser_request_body",
+      "title": "Capture Layer",
+      "type": "string"
+    },
+    "capture_api": {
+      "const": "chrome.webRequest",
+      "default": "chrome.webRequest",
+      "title": "Capture Api",
+      "type": "string"
+    },
+    "event_phase": {
+      "enum": [
+        "before_send_headers",
+        "request_aborted_before_headers"
+      ],
+      "title": "Event Phase",
+      "type": "string"
+    },
+    "method": {
+      "enum": [
+        "POST",
+        "PUT"
+      ],
+      "title": "Method",
+      "type": "string"
+    },
+    "target_origin": {
+      "title": "Target Origin",
+      "type": "string"
+    },
+    "target_path_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Target Path Sha256",
+      "type": "string"
+    },
+    "content_type": {
+      "enum": [
+        "application/json",
+        "text/plain",
+        "unsupported"
+      ],
+      "title": "Content Type",
+      "type": "string"
+    },
+    "body_bytes": {
+      "minimum": 0,
+      "title": "Body Bytes",
+      "type": "integer"
+    },
+    "captured_bytes": {
+      "maximum": 1048576,
+      "minimum": 0,
+      "title": "Captured Bytes",
+      "type": "integer"
+    },
+    "body_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Body Sha256"
+    },
+    "decoded_body_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decoded Body Sha256"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "encoding_state": {
+      "enum": [
+        "identity",
+        "unsupported",
+        "unknown"
+      ],
+      "title": "Encoding State",
+      "type": "string"
+    },
+    "parsing_state": {
+      "enum": [
+        "json",
+        "text",
+        "failed",
+        "unsupported"
+      ],
+      "title": "Parsing State",
+      "type": "string"
+    },
+    "detection_status": {
+      "enum": [
+        "matched",
+        "no_match",
+        "incomplete"
+      ],
+      "title": "Detection Status",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/DetectionFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "attachment_state": {
+      "default": "none",
+      "enum": [
+        "none",
+        "reference_content_unchecked",
+        "unsupported"
+      ],
+      "title": "Attachment State",
+      "type": "string"
+    },
+    "send_evidence": {
+      "const": "browser_request_observed_not_delivery",
+      "default": "browser_request_observed_not_delivery",
+      "title": "Send Evidence",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "observation_id",
+    "browser_run_id",
+    "extension_session_id",
+    "request_id_sha256",
+    "request_stage",
+    "tab_id",
+    "frame_id",
+    "event_phase",
+    "method",
+    "target_origin",
+    "target_path_sha256",
+    "content_type",
+    "body_bytes",
+    "captured_bytes",
+    "completeness",
+    "encoding_state",
+    "parsing_state",
+    "detection_status"
+  ],
+  "title": "BrowserRequestObservation",
+  "type": "object"
+}

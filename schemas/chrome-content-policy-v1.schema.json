@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "default": "chrome-content/1",
+      "title": "Version",
+      "type": "string"
+    },
+    "allowed_hosts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Hosts",
+      "type": "array"
+    },
+    "pii_rules": {
+      "default": false,
+      "title": "Pii Rules",
+      "type": "boolean"
+    },
+    "max_content_bytes": {
+      "default": 1048576,
+      "maximum": 1048576,
+      "minimum": 1,
+      "title": "Max Content Bytes",
+      "type": "integer"
+    }
+  },
+  "title": "ContentAnalysisPolicy",
+  "type": "object"
+}

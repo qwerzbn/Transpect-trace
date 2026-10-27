@@ -4,10 +4,38 @@
 #define TTRACE_BEHAVIOR_ETW 1
 #include "../guard/etw.c"
 #undef main
+#include <wchar.h>
 
 static ULONG final_stop_status = ERROR_INVALID_STATE;
 static DWORD scope_pids[8192], scope_count;
 static int scope_enabled;
+static int io_evidence_profile;
+static unsigned char file_profile_cache[65536], file_profile_version[65536];
+static ULONGLONG filtered_file_metadata;
+static int selected_io_task(const wchar_t *name) {
+    const wchar_t *selected[]={L"Create",L"CreateNewFile",L"Read",L"Write",L"Close",L"Cleanup"};
+    for(size_t i=0;i<sizeof(selected)/sizeof(selected[0]);i++)if(!_wcsicmp(name,selected[i]))return 1;
+    return 0;
+}
+static int selected_file_event(PEVENT_RECORD record) {
+    USHORT id=record->EventHeader.EventDescriptor.Id;
+    UCHAR version=record->EventHeader.EventDescriptor.Version;
+    if(file_profile_cache[id]&&file_profile_version[id]==version)return file_profile_cache[id]==1;
+    ULONG size=0;
+    if(TdhGetEventInformation(record,0,NULL,NULL,&size)!=ERROR_INSUFFICIENT_BUFFER||size>1024*1024||size<sizeof(TRACE_EVENT_INFO)){decode_errors++;return 0;}
+    TRACE_EVENT_INFO *info=malloc(size);if(!info){decode_errors++;return 0;}
+    int selected=0;
+    if(TdhGetEventInformation(record,0,NULL,info,&size)==ERROR_SUCCESS && info->TaskNameOffset &&
+       info->TaskNameOffset<size && size-info->TaskNameOffset>=sizeof(wchar_t)) {
+        const wchar_t *task=(wchar_t*)((BYTE*)info+info->TaskNameOffset);
+        size_t count=(size-info->TaskNameOffset)/sizeof(wchar_t);
+        if(wmemchr(task,L'\0',count)) {
+            selected=selected_io_task(task);
+            file_profile_cache[id]=selected?1:2;file_profile_version[id]=version;
+        } else decode_errors++;
+    } else decode_errors++;
+    free(info);return selected;
+}
 static int scoped(DWORD pid) {
     for(DWORD i=0;i<scope_count;i++)if(scope_pids[i]==pid)return 1;
     return 0;
@@ -39,7 +67,12 @@ static void WINAPI scoped_event(PEVENT_RECORD record) {
             }
         }
     } else if(!memcmp(provider,&providers[2],sizeof(GUID)))property_pid(record,L"PID",&pid);
-    if(scoped(pid))event(record);
+    if(scoped(pid)) {
+        if(io_evidence_profile&&!memcmp(provider,&providers[1],sizeof(GUID))&&!selected_file_event(record)) {
+            filtered_file_metadata++;return;
+        }
+        event(record);
+    }
 }
 typedef struct {ULONG count;ULONG reserved;EVENT_DESCRIPTOR events[1];} ManifestEvents;
 static int describe_file_schema(void) {
@@ -59,7 +92,7 @@ static int describe_file_schema(void) {
         if(!describe(&provider,&events->events[i],info,&size)) {
             printf("{\"event_id\":%u,\"task\":",events->events[i].Id);
             quote(info->TaskNameOffset?(wchar_t*)((char*)info+info->TaskNameOffset):L"");
-            printf(",\"fields\":[");
+            printf(",\"selected_by_io_evidence\":%s,\"fields\":[",info->TaskNameOffset&&selected_io_task((wchar_t*)((char*)info+info->TaskNameOffset))?"true":"false");
             for(ULONG j=0;j<info->TopLevelPropertyCount;j++) {
                 if(j)putchar(',');quote((wchar_t*)((char*)info+info->EventPropertyInfoArray[j].NameOffset));
             }
@@ -77,9 +110,10 @@ static DWORD WINAPI timed_stop(void *argument) {
 
 int main(int argc, char **argv) {
     if(argc==2&&!strcmp(argv[1],"--schema"))return describe_file_schema();
-    int duration = (argc == 2 || argc == 3) ? atoi(argv[1]) : 0;
+    int duration = (argc == 2 || argc == 3 || argc==4) ? atoi(argv[1]) : 0;
     if(duration < 1 || duration > 300) return 2;
-    if(argc==3){DWORD root=strtoul(argv[2],NULL,10);if(!root)return 2;scope_enabled=1;scope_pids[scope_count++]=root;}
+    if(argc>=3){DWORD root=strtoul(argv[2],NULL,10);if(!root)return 2;scope_enabled=1;scope_pids[scope_count++]=root;}
+    if(argc==4){if(strcmp(argv[3],"--io-evidence"))return 2;io_evidence_profile=1;}
     format_property=(FormatPropertyFn)GetProcAddress(LoadLibraryW(L"tdh.dll"),"TdhFormatProperty");
     if(!format_property) return 2;
     swprintf(session,128,L"TranspectBehavior-%lu",GetCurrentProcessId());
@@ -88,6 +122,7 @@ int main(int argc, char **argv) {
     properties->Wnode.Flags=WNODE_FLAG_TRACED_GUID;properties->Wnode.ClientContext=1;
     properties->LogFileMode=EVENT_TRACE_REAL_TIME_MODE;
     properties->LoggerNameOffset=sizeof(EVENT_TRACE_PROPERTIES);
+    if(io_evidence_profile){properties->BufferSize=256;properties->MinimumBuffers=64;properties->MaximumBuffers=256;properties->FlushTimer=1;}
     ULONG status=StartTraceW(&controller,session,properties);
     if(status!=ERROR_SUCCESS) goto unavailable;
     for(int i=0;i<3;i++) {
@@ -105,12 +140,12 @@ int main(int argc, char **argv) {
     ft.LowPart=wall.dwLowDateTime;ft.HighPart=wall.dwHighDateTime;
     HANDLE timer=CreateThread(NULL,0,timed_stop,(void *)(uintptr_t)duration,0,NULL);
     if(!timer){status=GetLastError();goto unavailable;}
-    printf("{\"kind\":\"etw.ready\",\"collector_pid\":%lu,\"qpc_frequency\":%lld,\"clock_qpc\":%lld,\"clock_filetime\":%llu}\n",
-           GetCurrentProcessId(),frequency.QuadPart,tick.QuadPart,ft.QuadPart);fflush(stdout);
+    printf("{\"kind\":\"etw.ready\",\"collector_pid\":%lu,\"qpc_frequency\":%lld,\"clock_qpc\":%lld,\"clock_filetime\":%llu,\"file_profile\":\"%s\"}\n",
+           GetCurrentProcessId(),frequency.QuadPart,tick.QuadPart,ft.QuadPart,io_evidence_profile?"io-evidence":"all");fflush(stdout);
     status=ProcessTrace(&consumer,1,NULL,NULL);
     WaitForSingleObject(timer,INFINITE);CloseHandle(timer);CloseTrace(consumer);
-    printf("{\"kind\":\"etw.stopped\",\"status\":%lu,\"events_lost\":%lu,\"buffers_lost\":%lu,\"decode_errors\":%lu,\"counters_verified\":%s}\n",
-           status,properties->EventsLost,properties->RealTimeBuffersLost,decode_errors,
+    printf("{\"kind\":\"etw.stopped\",\"status\":%lu,\"events_lost\":%lu,\"buffers_lost\":%lu,\"decode_errors\":%lu,\"filtered_file_metadata\":%llu,\"file_profile\":\"%s\",\"counters_verified\":%s}\n",
+           status,properties->EventsLost,properties->RealTimeBuffersLost,decode_errors,filtered_file_metadata,io_evidence_profile?"io-evidence":"all",
            final_stop_status==ERROR_SUCCESS?"true":"false");
     free(properties);return status==ERROR_SUCCESS && final_stop_status==ERROR_SUCCESS?0:4;
 unavailable:

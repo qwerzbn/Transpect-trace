@@ -66,7 +66,7 @@ def test_flow_cli_keeps_existing_groups_and_reads_unavailable(tmp_path):
     from typer.main import get_command
     from transpect_trace.cli import app
     assert set(get_command(app).commands) == {'guard','observe','protect','behavior','flow'}
-    assert set(get_command(app).commands['flow'].commands) == {'run','status','report','agents'}
+    assert set(get_command(app).commands['flow'].commands) == {'run','status','report','agents','scenarios','knowledge-mail'}
     (tmp_path/'runtime.json').write_text('{"state":"unavailable","can_enforce":false}')
     result = CliRunner().invoke(app, ['flow','status',str(tmp_path)])
     assert result.exit_code == 0 and 'unavailable' in result.output
