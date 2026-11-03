@@ -9,9 +9,19 @@
 #define JSMN_STRICT
 #include "third_party/jsmn/jsmn.h"
 
+/* Pin addresses default to the validated codex-cli 0.162.0-alpha.17.2 build and
+ * are overridable at build time (-DHTTP_RVA=...) so re-pinning to a new, equally
+ * validated build is a data + rebuild step, not a source edit. See
+ * deploy/guard/codex-windows-x64.json and scripts/build_guard_native.py. */
+#ifndef HTTP_RVA
 #define HTTP_RVA 0x09d96b10
+#endif
+#ifndef WSS_RVA
 #define WSS_RVA 0x03d6daa0
+#endif
+#ifndef DROP_HEADERS_RVA
 #define DROP_HEADERS_RVA 0x000eeb20
+#endif
 #define LIMIT (16u * 1024u * 1024u)
 #define DEADLINE_MS 2000
 #ifndef TTRACE_EXPECTED_HASH

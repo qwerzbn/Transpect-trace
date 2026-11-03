@@ -9,8 +9,8 @@ app=typer.Typer(no_args_is_help=True,help="Fixed-version native Codex request ga
 
 @app.command("baseline")
 def baseline(binary:Path=typer.Option(None,"--codex",exists=True)):
-    from .baseline import inspect_binary
-    path=binary or Path(shutil.which("codex") or "")
+    from .baseline import inspect_binary,resolve_codex_binary
+    path=resolve_codex_binary(binary or Path(shutil.which("codex") or ""))
     if not path.is_file():raise typer.BadParameter("Codex executable not found")
     result=inspect_binary(path);typer.echo(json.dumps(result,indent=2))
     if not result["supported"]:raise typer.Exit(1)
@@ -25,8 +25,9 @@ def codex(ctx:typer.Context,policy_file:Path=typer.Option(...,exists=True),
           egress_dll:Path=typer.Option(Path('build/egress/ttrace-egress.dll')),
           runs_dir:Path=typer.Option(Path("runs/guard"))):
     from .manager import launch
+    from .baseline import resolve_codex_binary
     from uuid import uuid4
-    path=binary or Path(shutil.which("codex") or "")
+    path=resolve_codex_binary(binary or Path(shutil.which("codex") or ""))
     args=list(ctx.args)
     if args and args[0]=="--":args=args[1:]
     engine=json.loads(engine_command_file.read_text(encoding="utf-8")) if engine_command_file else None

@@ -1,0 +1,55 @@
+{
+  "schema": "transpect.guard.adapter/1.0",
+  "version": "codex-cli 0.163.0",
+  "architecture": "windows-x64",
+  "binary_sha256": "2692c8c7bb2cf8b0aefe638741fc90236f4b824c59578ce84994f9de58200993",
+  "disk_mutation": false,
+  "instrumentation": "runtime-native",
+  "decision_deadline_ms": 2000,
+  "payload_limit_bytes": 16777216,
+  "hooks": [
+    {
+      "layer": "http_encoded_body_preparation",
+      "rva": "0xa24c3c0",
+      "entry_prefix_hex": "5541574156415541545657534881ece8",
+      "scope": "EncodedJsonBody before compression",
+      "rejection": "existing Result error tag 3 with owned String",
+      "owned_headers_drop_rva": "needs_dynamic_validation"
+    },
+    {
+      "layer": "wss_request_serialization",
+      "rva": "0x3ec8bf0",
+      "entry_prefix_hex": "5541574156415541545657534881ece8",
+      "scope": "response.create serialized JSON",
+      "rejection": "existing ApiError::Stream(String), tag 0x0d"
+    }
+  ],
+  "supported_actions": [
+    "block_request",
+    "block_session",
+    "terminate_process"
+  ],
+  "default_action": "block_request",
+  "modes": [
+    "exec",
+    "tui_no_daemon"
+  ],
+  "destination_extraction": "not_verified",
+  "wss_streaming_coverage": "not_claimed",
+  "uncovered": [
+    "raw/multipart uploads",
+    "other WSS message types",
+    "full WSS streaming",
+    "daemon/app-server",
+    "child process network egress",
+    "whole-system bypass prevention"
+  ],
+  "status": "candidate_unvalidated",
+  "validation_required": [
+    "owned_headers_drop_rva (no string anchor; locate via Frida fixture)",
+    "HTTP Result::Err(String) field layout at tag 3",
+    "WSS ApiError::Stream(String) layout at tag 0x0d, result tag 0x1c",
+    "dynamic argument/return-layout confirmation via a Frida fixture"
+  ],
+  "production_ready": false
+}

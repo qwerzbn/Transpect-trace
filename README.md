@@ -76,6 +76,15 @@ uv run --no-sync ttrace guard codex --codex $codexExe --policy-file $policyFile 
 | `registered_files` | 登记需要保护的 UTF-8 源码或文档；示例为空，不会自动将任意源码判为机密。相对路径基于**策略文件所在目录**。 |
 | `deny_action` | 默认 `block_request`；另支持 `block_session` 和显式 `terminate_process`。 |
 
+## 交付 Demo：输入输出审计加拦截
+
+按时效性／拦截成功率／性能／防绕过四个维度给出结果与边界的可复现 Demo（HTTPX 发送前门控），
+见 [docs/demo-io-audit.md](docs/demo-io-audit.md)：
+
+```powershell
+uv run --no-sync python scripts/demo_io_audit.py
+```
+
 ## 可选模块
 
 跨应用文件／Named Pipe 传播检测另见 [受控实验说明](docs/development/cross-application-flow.md)，使用 `ttrace flow`，与 Codex 请求门控分开验收。

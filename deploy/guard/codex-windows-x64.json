@@ -30,5 +30,6 @@
   "destination_extraction": "not_verified",
   "wss_streaming_coverage": "not_claimed",
   "uncovered": ["raw/multipart uploads", "other WSS message types", "full WSS streaming", "daemon/app-server", "child process network egress", "whole-system bypass prevention"],
+  "status": "validated",
   "production_ready": false
 }
