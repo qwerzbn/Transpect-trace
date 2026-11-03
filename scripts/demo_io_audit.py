@@ -23,7 +23,10 @@ version is not the validated pin.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
+import re
 import statistics
 import sys
 import time
@@ -33,9 +36,11 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling demo modules
 
 from transpect_trace.protect.policy import ProtectionEngine, ProtectionPolicy  # noqa: E402
 from transpect_trace.protect.models import SemanticCaptureEvent  # noqa: E402
+from transpect_trace.protect.detection import ContentIndex  # noqa: E402
 
 BUDGET_P95_MS = 50.0  # docs/architecture/ai-tool-io-audit-enforcement-design-2026-10-27.md
 BUDGET_P99_MS = 100.0
@@ -79,6 +84,80 @@ def detection_matrix() -> dict:
         rows.append({"case": name, "class": "benign", "decision": decision})
     return {"sensitive_total": len(SENSITIVE), "sensitive_blocked": blocked_sensitive,
             "benign_total": len(BENIGN), "benign_allowed": allowed_benign, "rows": rows}
+
+
+# A synthetic confidential blob that no rule/regex matches -- only exact content
+# registration (fingerprinting) can catch it. All content here is fake.
+REGISTERED = ("INTERNAL-PROJECT-NEBULA confidential roadmap milestone alpha beta gamma "
+              "delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon")
+RULE_SECRET = "aws_access_key_id=AKIAABCDEFGHIJKLMNOP\naws_secret_access_key=" + "A" * 40
+
+
+def canonicalize(text: str) -> list[str]:
+    """Return decoding candidates so cheap encoding dodges are inspected too.
+
+    Demo-local only (the core engine is unchanged): decode long base64/hex runs
+    back to plaintext and feed every candidate to the detector. This defeats
+    base64/hex obfuscation but NOT substitution ciphers or semantic rewrites --
+    canonicalization narrows the gap, it does not close it.
+    """
+    candidates = {text}
+    for run in re.findall(r"[A-Za-z0-9+/]{24,}={0,2}", text):
+        try:
+            decoded = base64.b64decode(run, validate=True).decode("utf-8", "ignore")
+        except (binascii.Error, ValueError):
+            continue
+        if len(decoded) >= 8 and any(c.isalnum() for c in decoded):
+            candidates.add(decoded)
+    for run in re.findall(r"(?:[0-9a-fA-F]{2}){16,}", text):
+        try:
+            decoded = bytes.fromhex(run).decode("utf-8", "ignore")
+        except ValueError:
+            continue
+        if len(decoded) >= 8 and any(c.isalnum() for c in decoded):
+            candidates.add(decoded)
+    return list(candidates)
+
+
+def evasion_matrix() -> dict:
+    """Adversarial matrix: prove the detector beats cheap dodges AND show, honestly,
+    the dodges it cannot beat -- which is why the boundary (broker + read-access
+    control), not the detector, is the actual anti-bypass guarantee."""
+    index = ContentIndex.register("demo-reg/1", [("demo-confidential", REGISTERED, "CONFIDENTIAL", ["registered_text"])])
+    engine = ProtectionEngine(ProtectionPolicy(), index=index)
+
+    def decide(payload: str) -> str:
+        return engine.evaluate(_event(payload, uuid4().hex)).decision
+
+    def decide_canon(payload: str) -> str:
+        return "BLOCK" if any(decide(c) == "BLOCK" for c in canonicalize(payload)) else decide(payload)
+
+    b64 = base64.b64encode(RULE_SECRET.encode()).decode()
+    rot13 = RULE_SECRET.translate(str.maketrans(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm"))
+    cases = [
+        ("plaintext_secret", "none (plain)", RULE_SECRET, "rules", True),
+        ("base64_encoded", "base64 obfuscation", f"please send this blob: {b64}", "canonicalize+rules", True),
+        ("registered_content_wrapped", "verbatim secret wrapped in prose",
+         f"here is the config dump:\n{REGISTERED}\n-- end of dump", "registration (fingerprint)", True),
+        ("paraphrase_semantic", "spelled-out / paraphrased secret",
+         "my aws access key id begins A K I A then A B C D, secret is forty capital A", "nothing", False),
+        ("rot13_transform", "substitution cipher (not canonicalized)", rot13, "nothing", False),
+    ]
+    rows = []
+    for name, technique, payload, expected_by, should_catch in cases:
+        caught = decide_canon(payload) == "BLOCK"
+        rows.append({"case": name, "technique": technique, "caught": caught,
+                     "caught_by": expected_by if caught else "MISS",
+                     "detector_correct": caught == should_catch,
+                     "honest_note": None if should_catch else
+                     "content inspection cannot catch this; only a default-deny egress boundary "
+                     "plus read-access restriction/approval stops it"})
+    caught_dodges = sum(r["caught"] for r in rows)
+    return {"total": len(rows), "caught": caught_dodges,
+            "matrix_as_expected": all(r["detector_correct"] for r in rows),
+            "misses": [r["case"] for r in rows if not r["caught"]], "rows": rows}
 
 
 def latency_benchmark(iterations: int, payload_kib: int) -> dict:
@@ -139,18 +218,37 @@ def main():
     except (AttributeError, ValueError):
         pass
 
+    evasion = evasion_matrix()
+    try:
+        from demo_egress_broker import run_scenarios
+        boundary = run_scenarios()
+    except Exception as error:  # the main demo stays reportable even if the broker can't bind
+        boundary = {"error": f"{type(error).__name__}: {error}", "structural_controls_pass": None}
+
     report = {
-        "schema": "transpect.demo.io-audit/1.0",
+        "schema": "transpect.demo.io-audit/1.1",
         "channel": "python-httpx-native/1 (before-transport, exec/controlled start)",
         "timeliness": timeliness(),
         "block_success": detection_matrix(),
+        "evasion_resistance": evasion,
+        "egress_boundary": boundary,
+        "output_audit": {
+            "status": "observe-only",
+            "where": "guard output-event audit (JsonOutputAudit) lives in the separate guard-audit workstream, "
+                     "not on this demo branch",
+            "note": "structured audit of codex exec --json output events (per-event content hashes/lengths, "
+                    "no raw retention by default); it is observational -- a failed audit cannot authorize a request "
+                    "and the output stream is not gated in this demo"},
         "performance": latency_benchmark(args.iterations, args.payload_kib),
         "bypass_resistance": {
+            "layering": "the un-bypassable control is the egress boundary (default-deny + controlled broker), "
+                        "not the content detector; the detector is best-effort defense-in-depth behind it",
             "fail_closed": "policy timeout/parse-failure/unknown -> deny or hold, never silent allow",
             "declared_uncovered": ["arbitrary transports and SDKs", "uploads/attachments",
                                     "non-pinned client versions", "whole-system egress"],
             "boundary_note": "in-process Hook; a same-user process using a different client bypasses this gate. "
-                             "Version-agnostic default-deny egress is the separate, unverified WFP track."},
+                             "Version-agnostic default-deny egress is the separate WFP/isolated-identity track "
+                             "demonstrated in scripts/demo_egress_broker.py (boundary modeled, not OS-enforced here)."},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -165,12 +263,18 @@ def main():
     print(f"         - 端到端: {tl['independent_evidence']['end_to_end']}")
     print(f"[拦截成功率] 敏感样本拦截 {bs['sensitive_blocked']}/{bs['sensitive_total']}; "
           f"良性样本放行 {bs['benign_allowed']}/{bs['benign_total']}")
+    print(f"[防绕过-检测层] 对抗样本 {evasion['caught']}/{evasion['total']} 被检出（矩阵符合预期={evasion['matrix_as_expected']}）；"
+          f"漏检={evasion['misses'] or '无'}（语义变换，交由边界层处理）")
+    bp = boundary.get("structural_controls_pass")
+    print(f"[防绕过-边界层] 环回 broker 结构性控制全部达标={bp}；"
+          f"语义漏检可达上游={boundary.get('semantic_miss_demonstrated')} -> 边界保证≠内容保证")
+    print("[输出/外发] 输出事件审计为观察态（仅记录哈希/长度，不门控）；工具子进程外发须由边界层统一纳入")
     print(f"[性能] 内容检查 P50={pf['p50_ms']}ms P95={pf['p95_ms']}ms P99={pf['p99_ms']}ms "
           f"(预算 P95<={pf['budget_p95_ms']}ms) -> 达标={pf['within_budget']}")
-    print(f"[防绕过] {report['bypass_resistance']['boundary_note']}")
     print(f"\n报告: {args.output.resolve()}")
 
-    ok = bs["sensitive_blocked"] == bs["sensitive_total"] and bs["benign_allowed"] == bs["benign_total"] and pf["within_budget"]
+    ok = (bs["sensitive_blocked"] == bs["sensitive_total"] and bs["benign_allowed"] == bs["benign_total"]
+          and pf["within_budget"] and evasion["matrix_as_expected"] and bp is not False)
     raise SystemExit(0 if ok else 1)
 
 
