@@ -1,0 +1,17 @@
+{
+  "description": "Prompt-only local DLP demo for Codex CLI; replace both absolute paths before installing and trusting this hook",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/ABSOLUTE/PATH/TO/python.exe\" \"C:/ABSOLUTE/PATH/TO/transpect-trace/scripts/cli_prompt_dlp_hook.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking submitted prompt locally"
+          }
+        ]
+      }
+    ]
+  }
+}

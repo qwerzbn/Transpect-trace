@@ -76,6 +76,10 @@ uv run --no-sync ttrace guard codex --codex $codexExe --policy-file $policyFile 
 | `registered_files` | 登记需要保护的 UTF-8 源码或文档；示例为空，不会自动将任意源码判为机密。相对路径基于**策略文件所在目录**。 |
 | `deny_action` | 默认 `block_request`；另支持 `block_session` 和显式 `terminate_process`。 |
 
+## CLI 用户 Prompt 内容检查 Demo
+
+本分支另提供一个独立的简化 Demo：通过官方 `UserPromptSubmit` Hook 检查用户提交的文字 Prompt，先在本机加密留存，再做四层内容识别；`REVIEW` 和 `BLOCK` 都拒绝提交。它不读取附件，也不检查 Codex 最终组装的模型请求或 Agent 工具流量。固定版 CLI 与本机不转发接收器的实测命令、结果和限制见 [CLI Prompt DLP 说明](docs/development/cli-prompt-dlp.md)。
+
 ## 交付 Demo：输入输出审计加拦截
 
 按时效性／拦截成功率／性能／防绕过四个维度给出结果与边界的可复现 Demo（HTTPX 发送前门控），
