@@ -91,10 +91,15 @@ def test_only_minimal_model_call_metadata_and_marker_matches_are_retained():
                                         "raw_body": "PRIVATE"})
     assert set(failed) == {"kind", "role", "hook", "stage", "observed_unix_ns"}
     event = current._safe_model_event({"kind": "marker_buffer", "hook": "model.http",
-                                       "sha256": "a" * 64, "raw_body": "PRIVATE"})
+                                       "sha256": "a" * 64, "request_shape": "other-json",
+                                       "raw_body": "PRIVATE"})
     assert event["kind"] == "marker_buffer"
     assert event["hook"] == "model.http"
+    assert event["request_shape"] == "other-json"
     assert "raw_body" not in event
+    rejected = current._safe_model_event({"kind": "marker_buffer", "hook": "model.wss",
+                                          "request_shape": "PRIVATE", "raw_body": "PRIVATE"})
+    assert "request_shape" not in rejected and "raw_body" not in rejected
 
 
 def test_candidate_summary_keeps_counts_and_receive_time_without_request_attribution():

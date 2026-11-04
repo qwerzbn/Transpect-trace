@@ -65,6 +65,20 @@ function markerOffset(bytes) {
   }
   return -1;
 }
+function requestShape(pointer, length) {
+  // Only decode a small buffer after the synthetic marker matches. The
+  // plaintext stays in-process; the controller receives an enum only.
+  if (length > 64 * 1024) return 'too-large-to-check';
+  try {
+    const value = JSON.parse(pointer.readUtf8String(length));
+    // This fixed Codex version serializes response.create as one flat object.
+    if (value && value.type === 'response.create' &&
+        typeof value.model === 'string' &&
+        (Array.isArray(value.input) || typeof value.input === 'string'))
+      return 'response.create-input';
+    return 'other-json';
+  } catch (_) { return 'invalid-json'; }
+}
 function inspectBuffer(pointer, length, hook, stage, context) {
   if (marker.length === 0 || pointer.isNull() || length < marker.length || length > maxBuffer)
     return;
@@ -74,6 +88,7 @@ function inspectBuffer(pointer, length, hook, stage, context) {
     if (offset < 0) return;
     send({kind: 'marker_buffer', hook: hook, stage: stage, bytes: length,
       marker_offset: offset, sha256: Checksum.compute('sha256', data),
+      request_shape: hook === 'model.wss' ? requestShape(pointer, length) : 'not-checked',
       caller: location(context.returnAddress), stack: stack(context.context),
       thread_id: Process.getCurrentThreadId()});
   } catch (_) { send({kind: 'read_hypothesis_failed', hook: hook, stage: stage}); }
@@ -102,8 +117,9 @@ function installCandidate(name, spec) {
         send({kind: 'candidate_entry', hook: name, rva: spec.rva,
           thread_id: Process.getCurrentThreadId(), caller: location(this.returnAddress)});
       }, onLeave(_) {
-        // The result tag and String fields are a read-only, unvalidated CLI hypothesis.
-        try { if (this.result.readU64().toNumber() !== 0x1c) return;
+        // Fixed desktop build disassembly suggests success tag 0x1f and String
+        // pointer/length at +16/+24. Dynamic request correlation is still required.
+        try { if (this.result.readU64().toNumber() !== 0x1f) return;
           const data = this.result.add(16).readPointer();
           const length = this.result.add(24).readU64().toNumber();
           inspectBuffer(data, length, name, 'hypothesized-wss-serialized', this);
@@ -349,6 +365,11 @@ def safe_event(payload: object, role: str) -> dict | None:
     value = payload.get("sha256")
     if isinstance(value, str) and _SHA.fullmatch(value):
         result["sha256"] = value
+    value = payload.get("request_shape")
+    if isinstance(value, str) and value in {
+            "response.create-input", "other-json", "invalid-json",
+            "too-large-to-check", "not-checked"}:
+        result["request_shape"] = value
     module = payload.get("module")
     if isinstance(module, str) and _MODULE.fullmatch(module):
         result["module"] = module

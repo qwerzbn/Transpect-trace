@@ -318,7 +318,12 @@ def run_trace(args) -> dict:
                                      and row.get("hook") in _MODEL_HOOKS for row in rows),
             "errors": sorted(set(errors)),
             "elapsed_ms": (time.time_ns() - began) / 1_000_000,
-            "interpretation": "candidate calls may be unrelated background traffic; without a marker hit they do not establish request correlation, completeness, denial, or zero-byte proof",
+            "interpretation": (
+                "a synthetic marker match correlates one candidate request and checks only its JSON shape; it does not establish exact wire bytes, path coverage, denial, or zero-byte proof"
+                if any(row.get("kind") == "marker_buffer" and row.get("hook") in _MODEL_HOOKS
+                       for row in rows) else
+                "candidate calls may be unrelated background traffic; without a marker hit they do not establish request correlation, completeness, denial, or zero-byte proof"
+            ),
         }
         (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         return report
