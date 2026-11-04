@@ -16,6 +16,7 @@ from pathlib import Path
 import secrets
 import uuid
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
@@ -172,21 +173,42 @@ class EncryptedRequestArchive:
             raise ValueError("archive record expired")
         return receipt, payload
 
-    def prune(self, *, now: datetime | None = None) -> int:
+    def prune(self, *, now: datetime | None = None, dry_run: bool = False) -> int:
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
             raise ValueError("prune time must be timezone-aware")
+        if type(dry_run) is not bool:
+            raise ValueError("dry_run must be boolean")
         removed = 0
         for path in self.directory.glob("*.enc"):
-            # A file's mtime can be refreshed without changing its authenticated
-            # creation time, so retention checks both timestamps.
-            old_mtime = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) <= now - self.retention
-            if not old_mtime:
+            if path.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(path)):
+                raise ValueError("archive record is a reparse point")
+            if len(path.stem) != 32 or any(char not in "0123456789abcdef" for char in path.stem):
+                raise ValueError("unexpected archive record filename")
+            try:
                 receipt, _ = self._decode(path.stem)
                 saved_at = datetime.fromisoformat(receipt.saved_at)
                 if saved_at.tzinfo is None:
                     raise ValueError("archive record time missing timezone")
-            if old_mtime or saved_at <= now - self.retention:
-                path.unlink()
+                expired = saved_at <= now - self.retention
+            except FileNotFoundError:
+                # Another pruner removed this record after glob() saw it.
+                continue
+            except (InvalidTag, ValueError, UnicodeDecodeError, TypeError, KeyError):
+                # A corrupt record cannot be read. Only an old filesystem mtime
+                # permits purging it; recent corruption stops the sweep.
+                try:
+                    expired = (datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+                               <= now - self.retention)
+                except FileNotFoundError:
+                    continue
+                if not expired:
+                    raise
+            if expired:
+                if not dry_run:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        continue
                 removed += 1
         return removed

@@ -57,3 +57,32 @@ def test_expired_encrypted_record_cannot_authorize_a_reference(tmp_path):
     # when filesystem mtime was refreshed after creation.
     assert archive.prune() == 1
     assert not (archive.directory / f"{receipt.record_id}.enc").exists()
+
+
+def test_prune_dry_run_and_authenticated_timestamp_govern_retention(tmp_path):
+    archive = EncryptedRequestArchive(tmp_path / "private")
+    old = datetime.now(timezone.utc) - timedelta(days=8)
+    expired = archive.save("model_request", b"old synthetic request", now=old)
+    recent = archive.save("model_request", b"recent synthetic request")
+    recent_path = archive.directory / f"{recent.record_id}.enc"
+    os.utime(recent_path, (old.timestamp(), old.timestamp()))
+
+    assert archive.prune(dry_run=True) == 1
+    assert (archive.directory / f"{expired.record_id}.enc").exists()
+    assert recent_path.exists()
+    assert archive.prune() == 1
+    assert not (archive.directory / f"{expired.record_id}.enc").exists()
+    assert recent_path.exists()
+    assert archive.read(recent.record_id)[1] == b"recent synthetic request"
+
+
+def test_prune_does_not_delete_unrecognized_enc_files(tmp_path):
+    archive = EncryptedRequestArchive(tmp_path / "private")
+    unrelated = archive.directory / "unrelated.enc"
+    unrelated.write_bytes(b"not an archive record")
+    old = datetime.now(timezone.utc) - timedelta(days=8)
+    os.utime(unrelated, (old.timestamp(), old.timestamp()))
+
+    with pytest.raises(ValueError, match="unexpected archive record filename"):
+        archive.prune()
+    assert unrelated.read_bytes() == b"not an archive record"
