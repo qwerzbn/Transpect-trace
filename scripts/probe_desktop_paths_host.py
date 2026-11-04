@@ -433,7 +433,7 @@ def _read_frida_events(receiver, rows: list[dict], errors: list[str],
 def _start_frida_bounded(adapter: dict, package: dict[str, str],
                          targets: dict[str, dict], args, marker: str,
                          attachment: Path, rows: list[dict], errors: list[str],
-                         version: dict[str, str], timeout: float = 20):
+                         version: dict[str, str], timeout: float = 45):
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
     observer = context.Process(target=_frida_worker,

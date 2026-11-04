@@ -8,7 +8,7 @@
 - 指定归档的官方 MSIX；探针复核 SHA-256、Authenticode 签名、包清单，以及专用用户当前的 `Get-AppxPackage OpenAI.Codex` 注册。它还核对桌面 `ChatGPT.exe` 和 `codex.exe app-server` 的路径、哈希、SID、父子关系与进程创建时间；可选的 Electron NetworkService 同样核对。固定版可能从 MSIX 内的 `app/resources/codex.exe` 启动，也可能先复制到专用用户的 `AppData/Local/OpenAI/Codex/bin/<16 位十六进制目录>/codex.exe` 再启动。两者都必须与归档后端哈希一致，并核对可执行文件签名指纹 `0467ED57E4A70CE35EB7284092F1FD5285225056` 和版本 `codex-cli 0.166.0-alpha.6`。用户目录取自该 SID 的 Windows 用户配置文件记录，不依据环境变量猜测。候选适配器必须保持 `candidate_unvalidated`。
 - `--protected-sid` 是当前 `zbn` 账户的 SID，`--expected-sid` 是专用用户的 SID。先分别在对应用户会话运行 `whoami /user` 取得它们。探针要求自身运行身份等于 `--expected-sid`，且两者不同；目标进程还必须属于专用 SID，因此不会附加到 `--protected-sid` 所属客户端。`--protected-sid` 由操作者提供，探针本身无法证明该值确实是 `zbn` 的 SID；必须在切换用户前核对。PID 来自专用用户安装的进程，不能填当前会话的 PID。
 - Frida 仅是研究依赖，由专用用户的 Python 环境提供。若应用保护或账户权限阻止附加，记录本次为**未观察到**；不要转而附加当前客户端。跨用户 Frida 附加可能需要管理员权限，本脚本明确不走跨用户附加路径。
-- 探针把 Frida 附加和脚本载入放进可终止的子进程；主进程保持目标进程句柄，最多等待 20 秒取得所有角色的就绪事件。超时会终止子进程、记录错误并输出 `coverage_status: unvalidated`，不会继续等待或转向当前账户的客户端。子进程在每次附加前后重新核对账户 SID、固定文件哈希、进程创建时间及父子关系；研究完成时主进程关闭该子进程。
+- 探针把 Frida 附加和脚本载入放进可终止的子进程；主进程保持目标进程句柄，最多等待 45 秒取得所有角色的就绪事件。首次专用账户实测中，两个角色最终都回报就绪，但后端超过原定 20 秒上限，探针按超时退出，因此将上限调整为 45 秒。超时仍会终止子进程、记录错误并输出 `coverage_status: unvalidated`，不会继续等待或转向当前账户的客户端。子进程在每次附加前后重新核对账户 SID、固定文件哈希、进程创建时间及父子关系；研究完成时主进程关闭该子进程。
 
 ## 合成样本与运行
 
