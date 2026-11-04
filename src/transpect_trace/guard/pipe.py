@@ -6,6 +6,7 @@ from ctypes import wintypes as w
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import threading
 import time
@@ -39,7 +40,15 @@ class SecurityAttributes(c.Structure):
     _fields_ = [("length",w.DWORD),("descriptor",c.c_void_p),("inherit",w.BOOL)]
 
 
-def pipe_security(k):
+def _pipe_sddl(controller_sid: str, client_sid: str | None = None) -> str:
+    for sid in (controller_sid, client_sid):
+        if sid is not None and not re.fullmatch(r"S-\d+(?:-\d+)+", sid):
+            raise ValueError("invalid pipe principal SID")
+    client_ace = f"(A;;GRGW;;;{client_sid})" if client_sid and client_sid != controller_sid else ""
+    return f"D:P(A;;GA;;;SY)(A;;GA;;;{controller_sid}){client_ace}"
+
+
+def pipe_security(k, client_sid: str | None = None):
     adv = c.WinDLL("advapi32",use_last_error=True)
     adv.OpenProcessToken.argtypes=[w.HANDLE,w.DWORD,c.POINTER(w.HANDLE)]
     adv.GetTokenInformation.argtypes=[w.HANDLE,c.c_int,c.c_void_p,w.DWORD,c.POINTER(w.DWORD)]
@@ -56,7 +65,7 @@ def pipe_security(k):
         sid=c.cast(data,c.POINTER(c.c_void_p))[0]
         if not adv.ConvertSidToStringSidW(sid,c.byref(sid_string)):
             raise c.WinError(c.get_last_error())
-        sddl=f"D:P(A;;GA;;;SY)(A;;GA;;;{c.wstring_at(sid_string)})"
+        sddl=_pipe_sddl(c.wstring_at(sid_string), client_sid)
         if not adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,c.byref(descriptor),None):
             raise c.WinError(c.get_last_error())
         return SecurityAttributes(c.sizeof(SecurityAttributes),descriptor,False)
@@ -66,10 +75,11 @@ def pipe_security(k):
 
 
 class PipeServer:
-    def __init__(self,pid:int,engine:PolicyEngine,audit:Path,workers:int=4,request_tap=None):
+    def __init__(self,pid:int,engine:PolicyEngine,audit:Path,workers:int=4,request_tap=None,
+                 client_sid:str|None=None):
         self.pid,self.engine,self.audit,self.workers=pid,engine,audit,workers
         self.name=rf"\\.\pipe\ttrace-guard-{pid}"
-        self.k=windows_api();self.security=pipe_security(self.k)
+        self.k=windows_api();self.security=pipe_security(self.k,client_sid)
         self.stop=threading.Event();self.ready=threading.Event();self.listening=threading.Event()
         self.lock=threading.Lock();self.threads=[];self.errors=[];self.records=[]
         self.closed=False

@@ -49,14 +49,18 @@ def test_build_refuses_unvalidated_candidate_adapter(tmp_path):
 def test_build_pins_come_from_validated_adapter(tmp_path):
     adapter = {"status": "validated", "binary_sha256": "d" * 64,
                "hooks": [
-                   {"layer": "http_encoded_body_preparation", "rva": "0xaaaa", "owned_headers_drop_rva": "0xbbbb"},
-                   {"layer": "wss_request_serialization", "rva": "0xcccc"}]}
+                   {"layer": "http_encoded_body_preparation", "rva": "0xaaaa", "owned_headers_drop_rva": "0xbbbb",
+                    "entry_prefix_hex": "554157415641554154565753"},
+                   {"layer": "wss_request_serialization", "rva": "0xcccc",
+                    "entry_prefix_hex": "555657534883ec68"}]}
     path = tmp_path / "validated.json"
     path.write_text(json.dumps(adapter))
     defines = pin_defines(path)
     assert "-DHTTP_RVA=0xaaaa" in defines
     assert "-DWSS_RVA=0xcccc" in defines
     assert "-DDROP_HEADERS_RVA=0xbbbb" in defines
+    assert "-DHTTP_ENTRY_PREFIX_BYTES={0x55,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x56,0x57,0x53}" in defines
+    assert "-DWSS_ENTRY_PREFIX_BYTES={0x55,0x56,0x57,0x53,0x48,0x83,0xec,0x68}" in defines
     assert '-DTTRACE_EXPECTED_HASH="' + "d" * 64 + '"' in defines
 
 
@@ -69,4 +73,16 @@ def test_validated_adapter_without_drop_rva_is_refused(tmp_path):
     path = tmp_path / "partial.json"
     path.write_text(json.dumps(adapter))
     with pytest.raises(SystemExit):
+        pin_defines(path)
+
+
+def test_validated_adapter_without_entry_prefix_is_refused(tmp_path):
+    adapter = {"status": "validated", "binary_sha256": "d" * 64,
+               "hooks": [
+                   {"layer": "http_encoded_body_preparation", "rva": "0xaaaa",
+                    "owned_headers_drop_rva": "0xbbbb", "entry_prefix_hex": "55" * 12},
+                   {"layer": "wss_request_serialization", "rva": "0xcccc"}]}
+    path = tmp_path / "missing-prefix.json"
+    path.write_text(json.dumps(adapter))
+    with pytest.raises(SystemExit, match="entry prefix"):
         pin_defines(path)

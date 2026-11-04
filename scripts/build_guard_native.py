@@ -17,6 +17,12 @@ def pin_defines(adapter_path: Path) -> list[str]:
     the adapter is promoted to validated by the dynamic Frida fixture.
     """
     adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
+    if adapter.get("schema") == "transpect.guard.desktop-adapter/1.0":
+        from transpect_trace.guard.desktop import validate_desktop_adapter
+        try:
+            validate_desktop_adapter(adapter)
+        except ValueError as error:
+            raise SystemExit(f"Desktop adapter is not dynamically validated: {error}") from error
     if adapter.get("status") != "validated":
         raise SystemExit(f"Adapter {adapter_path} is not validated (status={adapter.get('status')!r}); "
                          f"promote it before building a DLL. "
@@ -27,7 +33,14 @@ def pin_defines(adapter_path: Path) -> list[str]:
     drop = http.get("owned_headers_drop_rva")
     if not isinstance(drop, str) or not drop.startswith("0x"):
         raise SystemExit("Adapter is missing a validated owned_headers_drop_rva")
+    def prefix_define(hook: dict, macro: str) -> str:
+        value = hook.get("entry_prefix_hex")
+        if (not isinstance(value, str) or len(value) < 16 or len(value) > 64
+                or len(value) % 2 or any(ch not in "0123456789abcdefABCDEF" for ch in value)):
+            raise SystemExit(f"Adapter has no validated {macro} entry prefix")
+        return f"-D{macro}={{" + ",".join(f"0x{byte:02x}" for byte in bytes.fromhex(value)) + "}"
     return [f"-DHTTP_RVA={http['rva']}", f"-DWSS_RVA={wss['rva']}", f"-DDROP_HEADERS_RVA={drop}",
+            prefix_define(http, "HTTP_ENTRY_PREFIX_BYTES"), prefix_define(wss, "WSS_ENTRY_PREFIX_BYTES"),
             f'-DTTRACE_EXPECTED_HASH="{adapter["binary_sha256"]}"']
 
 
@@ -64,6 +77,8 @@ def main():
                for p in args.output.iterdir() if p.suffix in {".dll",".exe"}}
     (args.output/"build-manifest.json").write_text(json.dumps({
         "toolchain":"ziglang 0.13.0","artifacts_sha256":artifacts,
+        "adapter_sha256": hashlib.sha256(args.adapter.resolve().read_bytes()).hexdigest() if args.adapter else None,
+        "target_binary_sha256": json.loads(args.adapter.resolve().read_text(encoding="utf-8"))["binary_sha256"] if args.adapter else None,
         "sources_sha256":{str(p):hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in root.glob("*.c")}},indent=2)+"\n",encoding="utf-8")
 

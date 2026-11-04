@@ -22,6 +22,12 @@
 #ifndef DROP_HEADERS_RVA
 #define DROP_HEADERS_RVA 0x000eeb20
 #endif
+#ifndef HTTP_ENTRY_PREFIX_BYTES
+#define HTTP_ENTRY_PREFIX_BYTES {0x55,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x56,0x57,0x53}
+#endif
+#ifndef WSS_ENTRY_PREFIX_BYTES
+#define WSS_ENTRY_PREFIX_BYTES {0x55,0x56,0x57,0x53,0x48,0x83,0xec,0x68}
+#endif
 #define LIMIT (16u * 1024u * 1024u)
 #define DEADLINE_MS 2000
 #ifndef TTRACE_EXPECTED_HASH
@@ -305,8 +311,8 @@ static DWORD WINAPI initialize(LPVOID unused) {
     /* No hooks become active before a compatible local engine responds. */
     if (policy("native.initialize", "control", NULL, 0) != 0) return 2;
     unsigned char *base = (unsigned char *)GetModuleHandleW(NULL);
-    const unsigned char http_prefix[] = {0x55,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x56,0x57,0x53};
-    const unsigned char wss_prefix[] = {0x55,0x56,0x57,0x53,0x48,0x83,0xec,0x68};
+    const unsigned char http_prefix[] = HTTP_ENTRY_PREFIX_BYTES;
+    const unsigned char wss_prefix[] = WSS_ENTRY_PREFIX_BYTES;
     if (memcmp(base + HTTP_RVA, http_prefix, sizeof(http_prefix)) ||
         memcmp(base + WSS_RVA, wss_prefix, sizeof(wss_prefix))) return 3;
     drop_headers = (DropFn)(base + DROP_HEADERS_RVA);

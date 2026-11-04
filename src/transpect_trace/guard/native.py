@@ -99,8 +99,11 @@ def process_identity(pid:int,*,launched_cli:bool=False) -> dict:
     return {"pid":pid,"creation_filetime":created,"guard_session_id":f"{pid}-{created}","baseline":baseline,"cli_mode":mode}
 
 
-def inject(pid:int,dll:Path,expected_identity:dict|None=None,*,launched_cli:bool=False):
-    identity=process_identity(pid,launched_cli=launched_cli)
+def inject(pid:int,dll:Path,expected_identity:dict|None=None,*,launched_cli:bool=False,identity_resolver=None):
+    # The desktop app-server has a different, separately pinned identity check.
+    # The default keeps the existing CLI-only scope unchanged.
+    identity=(identity_resolver(pid) if identity_resolver is not None
+              else process_identity(pid,launched_cli=launched_cli))
     if expected_identity and identity["creation_filetime"]!=expected_identity["creation_filetime"]:
         raise ValueError("PID was reused before injection")
     k=api();handle=k.OpenProcess(0x2|0x8|0x10|0x20|0x400|0x100000,False,pid)

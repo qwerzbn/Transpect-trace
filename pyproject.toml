@@ -13,6 +13,9 @@ dependencies = [
   "pydantic>=2.8,<3",
   "typer>=0.12,<1",
   "zstandard>=0.23,<1",
+  "cryptography>=43,<46",
+  "defusedxml>=0.7,<1",
+  "pypdf>=6.21,<7",
 ]
 
 [project.optional-dependencies]

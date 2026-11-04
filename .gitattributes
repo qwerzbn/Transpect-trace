@@ -2,3 +2,5 @@
 native/guard/third_party/** -text whitespace=-blank-at-eof,cr-at-eol
 patches/ecapture-windows/enhanced/** -text
 patches/ecapture-windows/target-bound/*.patch -text whitespace=-space-before-tab
+patches/ecapture-windows/target-bound/*.go -text
+scripts/start_desktop_dlp_vm_wsl.sh text eol=lf
