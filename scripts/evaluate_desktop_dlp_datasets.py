@@ -10,12 +10,13 @@ import argparse
 import ast
 from collections import Counter, defaultdict
 import hashlib
+from html import escape
 from io import BytesIO
 import json
 from pathlib import Path
 import time
 from urllib.request import urlopen
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZipFile, ZipInfo
 
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
@@ -23,6 +24,15 @@ from transpect_trace.protect.content_dlp import ContentDLPEngine, EDMIndex, Fing
 
 
 ROOT = Path(__file__).resolve().parents[1]
+OFFICE_TEMPLATES = ROOT / "tests" / "fixtures" / "desktop_dlp_office"
+_OFFICE_TEMPLATE_SHA256 = {
+    "docx": "9e80afd9ae27452725193821f7058d4a63aff6fdc05ebdb8d4105426a7382028",
+    "xlsx": "00498752aa7bd7ec53cb2d05c1bf6a15008396824e51076e6c26254cd72b2078",
+    "pptx": "134c4b49da4b735be84beb0b3bfc4257be6d181b582e5080fbfa90d594afcf85",
+}
+_OFFICE_PART = {"docx": "word/document.xml", "xlsx": "xl/worksheets/sheet1.xml",
+                "pptx": "ppt/slides/slide1.xml"}
+_OFFICE_PLACEHOLDER = b"SYNTHETIC_DLP_PAYLOAD"
 DATASETS = {
     "gretel_en": {
         "id": "gretelai/gretel-pii-masking-en-v1",
@@ -30,6 +40,7 @@ DATASETS = {
         "file": "gretel-test.parquet",
         "source_path": "data/test-00000-of-00001.parquet",
         "sha256": "c89a6bffa838edb0f2fc6686bf35da4930944519ac97308b0b6e32298594b5b1",
+        "size": 2029143,
     },
     "pii_zh": {
         "id": "wan9yu/pii-bench-zh",
@@ -37,6 +48,15 @@ DATASETS = {
         "file": "pii-bench-zh.jsonl",
         "source_path": "data/pii_bench_zh.jsonl",
         "sha256": "bcaa54909fd69c6737b8e442c4d740ce1bf5b95b7d4af70b2f2692010e1ff7a5",
+        "size": 1834636,
+    },
+    "pii_zh_chat": {
+        "id": "wan9yu/pii-bench-zh",
+        "revision": "c350b94897af668517ff5de237d89f2ce2eaa6f0",
+        "file": "pii-bench-zh-chat.jsonl",
+        "source_path": "data/pii_bench_zh_chat.jsonl",
+        "sha256": "4ddacd78dfac49b723032de5e1c29c432a44049245e03a8ea960c86bbf3b765c",
+        "size": 853574,
     },
 }
 
@@ -69,11 +89,25 @@ def _pdf(text: str) -> bytes:
 
 
 def _office(extension: str, text: str) -> bytes:
-    main = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml", "pptx": "ppt/presentation.xml"}[extension]
+    main = _OFFICE_PART[extension]
+    template = (OFFICE_TEMPLATES / f"template.{extension}").read_bytes()
+    if hashlib.sha256(template).hexdigest() != _OFFICE_TEMPLATE_SHA256[extension]:
+        raise ValueError("Office fixture template digest mismatch")
+    replacement = escape(text, quote=False).encode("utf-8")
     with BytesIO() as stream:
-        with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
-            archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
-            archive.writestr(main, f"<root><t>{text}</t></root>")
+        with ZipFile(BytesIO(template)) as source, ZipFile(stream, "w") as archive:
+            if main not in source.namelist():
+                raise ValueError("Office fixture payload part missing")
+            for original in source.infolist():
+                contents = source.read(original.filename)
+                if original.filename == main:
+                    if contents.count(_OFFICE_PLACEHOLDER) != 1:
+                        raise ValueError("Office fixture placeholder mismatch")
+                    contents = contents.replace(_OFFICE_PLACEHOLDER, replacement)
+                entry = ZipInfo(original.filename, date_time=(1980, 1, 1, 0, 0, 0))
+                entry.create_system = 0
+                entry.external_attr = 0
+                archive.writestr(entry, contents, compress_type=original.compress_type)
         return stream.getvalue()
 
 
@@ -146,7 +180,7 @@ def evaluate_fixtures(seed: str) -> dict:
             matrix[expected][verdict.decision] += 1
         rows.append({
             "case": case_id, "kind": kind, "expected": expected, "actual": verdict.decision,
-            "gate_denied": verdict.decision != "ALLOW", "reason": verdict.reason,
+            "policy_would_deny": verdict.decision != "ALLOW", "reason": verdict.reason,
             "rule_ids": verdict.rule_ids, "payload_sha256": hashlib.sha256(
                 payload.encode() if isinstance(payload, str) else payload).hexdigest(),
             "elapsed_ms": round(elapsed, 3),
@@ -157,7 +191,7 @@ def evaluate_fixtures(seed: str) -> dict:
         "latency_ms": {"p50": _percentile(latency, .5), "p95": _percentile(latency, .95),
                        "p99": _percentile(latency, .99)},
         "known_miss": "text_paraphrase",
-        "note": "REVIEW is denied at the live gate; unsupported formats are counted separately from detection.",
+        "note": "A future desktop gate must deny REVIEW; this offline evaluation does not verify live enforcement. Unsupported formats are counted separately from detection.",
     }
 
 
@@ -169,13 +203,21 @@ def _local_file(directory: Path, descriptor: dict) -> Path:
                f'{descriptor["revision"]}/{descriptor["source_path"]}')
         temporary = path.with_suffix(path.suffix + ".part")
         with urlopen(url, timeout=60) as response, temporary.open("wb") as output:
+            size = 0
             while chunk := response.read(1024 * 1024):
+                size += len(chunk)
+                if size > descriptor["size"]:
+                    raise ValueError(f"dataset size exceeds pinned value: {descriptor['id']}")
                 output.write(chunk)
+        if (size != descriptor["size"]
+                or hashlib.sha256(temporary.read_bytes()).hexdigest() != descriptor["sha256"]):
+            raise ValueError(f"downloaded dataset digest or size mismatch: {descriptor['id']}")
         temporary.replace(path)
+    if path.stat().st_size != descriptor["size"]:
+        raise ValueError(f"dataset size mismatch: {descriptor['id']}")
     with path.open("rb") as stream:
-        actual = hashlib.file_digest(stream, "sha256").hexdigest()
-    if actual != descriptor["sha256"]:
-        raise ValueError(f"dataset digest mismatch: {descriptor['id']}")
+        if hashlib.file_digest(stream, "sha256").hexdigest() != descriptor["sha256"]:
+            raise ValueError(f"dataset digest mismatch: {descriptor['id']}")
     return path
 
 
@@ -218,19 +260,24 @@ def _rows(paths: dict[str, Path]):
         yield "gretel_en", str(uid), text, {
             str(kind).lower() for entity in annotations for kind in entity.get("types", [])
         }, _redact_entities(text, (entity.get("entity") for entity in annotations))
-    with paths["pii_zh"].open(encoding="utf-8") as stream:
-        for line in stream:
-            row = json.loads(line)
-            yield "pii_zh", str(row["id"]), row["text"], {
-                str(entity.get("type", "")).lower() for entity in row.get("entities", [])
-            }, _redact_entities(row["text"], (entity.get("text") for entity in row.get("entities", [])))
+    for source in ("pii_zh", "pii_zh_chat"):
+        with paths[source].open(encoding="utf-8") as stream:
+            for line in stream:
+                row = json.loads(line)
+                yield source, str(row["id"]), row["text"], {
+                    str(entity.get("type", "")).lower() for entity in row.get("entities", [])
+                }, _redact_entities(row["text"], (entity.get("text") for entity in row.get("entities", [])))
 
 
 def _select(rows, per_dataset: int, seed: str):
+    if per_dataset < 0:
+        raise ValueError("per_dataset must be nonnegative")
     by_source = defaultdict(list)
     for row in rows:
         by_source[row[0]].append(row)
     for source, group in by_source.items():
+        if len({row[1] for row in group}) != len(group):
+            raise ValueError(f"duplicate dataset row ID: {source}")
         ranked = sorted(group, key=lambda row: hashlib.sha256(
             f"{seed}:{source}:{row[1]}".encode()).digest())
         yield from ranked if per_dataset == 0 else ranked[:per_dataset]
@@ -243,7 +290,7 @@ def _percentile(values: list[float], fraction: float) -> float:
     return round(ordered[min(len(ordered) - 1, int((len(ordered) - 1) * fraction))], 3)
 
 
-def evaluate(paths: dict[str, Path], *, per_dataset: int = 500, seed: str = "2026-11-04") -> dict:
+def evaluate(paths: dict[str, Path], *, per_dataset: int = 0, seed: str = "2026-11-04") -> dict:
     engine = ContentDLPEngine()
     counts = defaultdict(Counter)
     redacted_counts = defaultdict(Counter)
@@ -259,18 +306,23 @@ def evaluate(paths: dict[str, Path], *, per_dataset: int = 500, seed: str = "202
         for label in labels:
             label_counts[source][label][verdict.decision] += 1
     return {
-        "schema": "transpect.desktop-dlp.dataset-evaluation/1.0",
+        "schema": "transpect.desktop-dlp.dataset-evaluation/1.1",
         "seed": seed, "sample_per_dataset": per_dataset,
+        "selection_mode": "full" if per_dataset == 0 else "hash_ranked_sample",
+        "blind_holdout": False, "policy_truth_available_for_public_corpora": False,
+        "live_enforcement_verified": False,
         "interpretation": ("These corpora contain annotated PII, including weak entities such as names. "
                            "ALLOW is not automatically a policy error; per-label rates are diagnostic. "
                            "Redacted counterparts remove annotated values and provide only an approximate "
                            "false-positive diagnostic because unannotated sensitive content may remain. "
-                           "REVIEW is denied at the live gate. The confusion matrix below uses separate "
-                           "synthetic fixtures with explicit policy labels."),
+                           "These corpora were used during development, so this is not a blind holdout. "
+                           "A future desktop gate must deny REVIEW; live enforcement is not verified here. "
+                           "The confusion matrix below uses separate developer-made synthetic fixtures "
+                           "with explicit policy labels."),
         "datasets": {name: {"id": descriptor["id"], "revision": descriptor["revision"],
                             "sha256": descriptor["sha256"],
                             "decisions": dict(counts[name]),
-                            "redacted_negative_decisions": dict(redacted_counts[name]),
+                            "redacted_proxy_decisions": dict(redacted_counts[name]),
                             "by_entity_label": {label: dict(counter) for label, counter in sorted(label_counts[name].items())},
                             "latency_ms": {"p50": _percentile(timings[name], .5),
                                            "p95": _percentile(timings[name], .95),
@@ -284,8 +336,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, default=ROOT / "runs/desktop-dlp-datasets")
     parser.add_argument("--output", type=Path, default=ROOT / "runs/desktop-dlp-datasets/report.json")
-    parser.add_argument("--per-dataset", type=int, default=500,
-                        help="0 evaluates every row; default is a fixed 500-row sample each")
+    parser.add_argument("--per-dataset", type=int, default=0,
+                        help="0 evaluates every row (default); use 500 for a fixed quick sample each")
     parser.add_argument("--seed", default="2026-11-04")
     args = parser.parse_args()
     if args.per_dataset < 0:
@@ -295,7 +347,7 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for name, row in result["datasets"].items():
-        print(name, row["decisions"], "redacted", row["redacted_negative_decisions"], row["latency_ms"])
+        print(name, row["decisions"], "redacted_proxy", row["redacted_proxy_decisions"], row["latency_ms"])
     print("synthetic_fixture_matrix", result["fixtures"]["matrix"])
     print("known_miss", result["fixtures"]["known_miss"])
     print(args.output)

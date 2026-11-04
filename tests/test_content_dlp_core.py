@@ -139,6 +139,16 @@ def test_office_split_runs_and_metadata_are_checked():
     assert engine.inspect_file_bytes("metadata.docx", metadata).decision == "BLOCK"
 
 
+def test_office_structural_attributes_do_not_become_content_tokens():
+    engine = ContentDLPEngine()
+    structural = _office("xlsx", "Public notes", extra=(
+        "xl/styles.xml",
+        b'<root><style id="50000" count="300000" size="35000" '
+        b'guid="5C22544A-7EE6-4342-B048-85BDC9FD1C3A"/></root>',
+    ))
+    assert engine.inspect_file_bytes("public.xlsx", structural).decision == "ALLOW"
+
+
 def test_edm_requires_fields_from_the_same_record():
     index = EDMIndex.from_records({
         "a": {"name": "Alice Example", "employee_id": "E10293"},

@@ -17,7 +17,8 @@ def pin_defines(adapter_path: Path) -> list[str]:
     the adapter is promoted to validated by the dynamic Frida fixture.
     """
     adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
-    if adapter.get("schema") == "transpect.guard.desktop-adapter/1.0":
+    desktop_adapter = adapter.get("schema") == "transpect.guard.desktop-adapter/1.0"
+    if desktop_adapter:
         from transpect_trace.guard.desktop import validate_desktop_adapter
         try:
             validate_desktop_adapter(adapter)
@@ -39,9 +40,24 @@ def pin_defines(adapter_path: Path) -> list[str]:
                 or len(value) % 2 or any(ch not in "0123456789abcdefABCDEF" for ch in value)):
             raise SystemExit(f"Adapter has no validated {macro} entry prefix")
         return f"-D{macro}={{" + ",".join(f"0x{byte:02x}" for byte in bytes.fromhex(value)) + "}"
-    return [f"-DHTTP_RVA={http['rva']}", f"-DWSS_RVA={wss['rva']}", f"-DDROP_HEADERS_RVA={drop}",
+    defines = [f"-DHTTP_RVA={http['rva']}", f"-DWSS_RVA={wss['rva']}", f"-DDROP_HEADERS_RVA={drop}",
             prefix_define(http, "HTTP_ENTRY_PREFIX_BYTES"), prefix_define(wss, "WSS_ENTRY_PREFIX_BYTES"),
             f'-DTTRACE_EXPECTED_HASH="{adapter["binary_sha256"]}"']
+    if desktop_adapter:
+        # A desktop adapter cannot inherit the older CLI's success tag or
+        # allocator behavior. Only these exact fixed-build ABI observations
+        # have been reproduced in the isolated nonforwarding origin lab.
+        abi = adapter.get("native_abi")
+        expected = {"wss_success_tag": "0x1f", "wss_denied_tag": "0x0d",
+                    "http_denied_tag": "0x03", "http_empty_error_string": True}
+        if not isinstance(abi, dict) or any(abi.get(key) != value for key, value in expected.items()):
+            raise SystemExit("Desktop adapter lacks the fixed HTTP/WSS result ABI proof")
+        drop_prefix = http.get("owned_headers_drop_entry_prefix_hex")
+        defines.append(prefix_define({"entry_prefix_hex": drop_prefix},
+                                     "DROP_HEADERS_PREFIX_BYTES"))
+        defines.extend(("-DWSS_SUCCESS_TAG=0x1f", "-DWSS_DENIED_TAG=0x0d",
+                        "-DHTTP_DENIED_TAG=0x03", "-DHTTP_EMPTY_ERROR_STRING=1"))
+    return defines
 
 
 def main():

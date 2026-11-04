@@ -43,3 +43,17 @@ uv run --no-sync python scripts/probe_desktop_paths_current.py trace `
 为核对请求结构，`trace-05` 增加了仅在合成标记命中后才运行的有界 JSON 解析，首次误按嵌套 `response` 对象判断，因而将两个有效 JSON 标为 `other-json`。固定版 [源码测试](https://github.com/openai/codex/blob/rust-v0.166.0-alpha.6/codex-rs/codex-api/src/endpoint/responses_websocket.rs#L1065-L1082)表明 `response.create`、`model` 和 `input` 位于同一层。修正后再次自动提交一条合成 Prompt，`trace-06` 在 WSS 候选点发现两条包含该标记的缓冲区，分别为 2,629 和 4,955 字节；两条均解析为扁平的 `response.create` 对象，且包含 `model` 与 `input`。第一条出现在测试任务启动后约 0.66 秒，第二条约 4.01 秒，后者可能是任务后续请求；报告没有保存正文或模型名称。HTTP 候选调用数为 0、WSS 候选调用数为 5、探针错误数为 0；`summary.json` SHA-256 为 `F14C4A490946A29521E7C8F855A9107B2658E6729E456F9A6B8AA1BA4C699B15`。这进一步验证了该 Local 路径的请求结构，仍不能证明整个 WSS 帧逐字节相同或阻断已经生效。
 
 隔离的非转发本地 WSS 源站能够收到合成请求，但该隔离 `app-server` 路径没有调用当前桌面端命中的序列化候选函数；仅加入 `features.code_mode_host=true` 也未改变结果。另一次使用完全合成的 ChatGPT 登录资料时，隔离后端虽识别了登录状态，合成 Prompt 却没有到达本地源站，两个模型候选函数均没有调用。因此隔离实验尚不能用于证明该 Hook 的拒绝返回会使源站收到 0 字节。当前账户的正式桌面控制器还要求独立控制身份、已验证适配器、附件门控及 WFP 默认拒绝，均未在本次观察中启用。
+
+在同一 Local 合成测试任务中自动运行一次只读的 `whoami /user` 与进程查询，工具进程为 `pwsh.exe`，父进程 PID 为当前 `codex.exe app-server` 的 15312，Windows SessionId 为 3，用户 SID 末尾同为 `1001`。这证明该次工具调用没有独立于桌面端的账户身份。按 `zbn` 用户 SID 设置 WFP 默认拒绝会同时影响现用客户端及该账户其他程序，不能被当作已经实现的 Agent 子进程专用边界；完整工具外发控制仍需独立、可验证的子进程身份或等效的系统级隔离。
+
+## 当前客户端的合成阻断尝试
+
+`scripts/probe_desktop_current_deny.py` 是短时研究探针，只针对归档哈希一致的当前 `app-server`，安装 HTTP 和 WSS 两个候选 Hook，并限制为单个随机合成标记。它没有接入 DLP 判定，也没有受控源站的接收证据；报告始终标记 `production_ready=false`、`coverage_status=unvalidated`。当前客户端所有 Local 任务共用后端，因此探针出错可能影响本聊天。
+
+首轮自动测试中，标记也出现在本聊天的工具输出里，探针把这些非目标请求误当成目标并拒绝，导致合成测试任务发生 `stream disconnected`。首轮报告中 WSS 与 HTTP 各有 6 次拒绝事件，但 12 次匹配均标记为 `marker_not_in_user_input`；这些事件**不能**作为目标 Prompt 成功阻断的证据。探针退出后后端 PID 仍存活。报告 `runs/desktop-current/deny-trace-20261104-01/summary.json` 的 SHA-256 为 `81BD4ED83F5D291E33AE8C844F4E91B6104EF116AD26C195793B678FBAF865FE`。
+
+修订后，标记若只在非用户输入位置出现，就原样通过。第二轮重新生成并自动提交合成文字，两个 Hook 安装成功、错误数为零；HTTP 观察到 1 次非目标标记，WSS 未观察到目标匹配，拒绝数为零，报告为 `no_synthetic_denial_observed`。跨任务发送工具在测试任务 rollout 中把这次文字交付为 `function_call_output`，而研究探针仅把 `role=user` 内容视为目标。这轮同样不能证明当前桌面端已在发送前拦截用户 Prompt。报告 `runs/desktop-current/deny-trace-20261104-02/summary.json` 的 SHA-256 为 `C102E0F913F609FC51552E2AE265ED19172F68415B1E186438B79F4563A21FB8`。下一步需先以可靠的任务身份元数据关联目标请求，再进行拒绝测试；仅靠随机标记在共享后端中不足以归因。
+
+随后用只读的 `scripts/probe_desktop_current_thread_metadata.py` 检查固定版请求中的任务归属。第三轮合成消息经跨任务发送工具进入测试任务，探针在 HTTP 候选点观察到一条 171,558 字节请求：`client_metadata.thread_id` 与固定测试任务 UUID 相等，标记位于 `function_call_output.output`，不在 `role=user.content`；WSS 未见该标记。两个 Hook 均已安装，错误数为零。脚本只保存这三个布尔结果、长度和哈希，不保存任务 ID 或正文。报告为 `metadata_attributed_to_test_thread`，`runs/desktop-current/thread-trace-20261104-01/summary.json` 的 SHA-256 为 `85B2DB20247190AA044F207D3228A85DB8877D88287DE3DCEF5AD03730596916`。此结果可用于后续**限定合成测试请求**的归因，仍不是阻断或完整路径覆盖的证明。
+
+第四轮将该任务 ID 与 `function_call_output` 标记作为共同条件，短时运行修订后的拒绝探针。当前桌面端的 HTTP 候选点观察到 6 次归属于测试任务的合成请求及 6 次错误返回构造，长度为 172,465 字节及后续重试的 172,702 字节；未见 WSS 目标命中、非目标标记或探针错误。测试任务报告 `stream disconnected`，共享后端 PID 仍存活。报告状态是 `one_candidate_denial_observed_without_origin_proof`，`runs/desktop-current/deny-trace-20261104-03/summary.json` 的 SHA-256 为 `C484D3434B01BD422BE27137262EC88A35F9DD75D369018DC7FDF84C4FAAFDB5`。这验证了该次合成请求在当前客户端 HTTP 候选点的拒绝动作，**没有**把正文交给 DLP 或加密归档，也没有独立服务端接收证据；WSS、附件及 Agent 工具直连仍未覆盖。

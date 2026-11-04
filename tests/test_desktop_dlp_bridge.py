@@ -185,3 +185,102 @@ def test_untyped_data_url_and_empty_input_fail_closed(tmp_path):
     assert bridge.evaluate(_request({"model": "fixture", "input": ["prefix data:application/pdf;base64,SGVsbG8="]}))[0].decision == "deny"
     assert bridge.evaluate(_request({"model": "fixture", "input": ["data:;base64,SGVsbG8="]}))[0].decision == "deny"
     assert bridge.evaluate(_request({"model": "fixture", "input": None}))[0].decision == "deny"
+
+
+def test_flat_wss_tool_parameter_schema_is_not_an_attachment(tmp_path):
+    bridge = _bridge(tmp_path)
+    body = {"type": "response.create", "model": "fixture", "input": "Hello",
+            "tools": [{"type": "function", "name": "example",
+                       "parameters": {"type": "object", "properties": {
+                           "image_url": {"type": "string"},
+                           "file_id": {"type": ["string", "null"]}}}}]}
+    fixture = _request({"model": "fixture", "input": "Hello"}, protocol="wss")
+    request = fixture.model_copy(update={"payload_utf8": json.dumps(body)})
+    decision, row = bridge.evaluate(request)
+    assert decision.decision == "allow"
+    assert bridge.archive.read(row["archive_record_id"])[1] == request.payload_utf8.encode()
+
+    body["tools"][0]["parameters"]["properties"]["file_id"] = "file_unchecked"
+    assert bridge.evaluate(fixture.model_copy(update={"payload_utf8": json.dumps(body)}))[0].decision == "deny"
+    body["tools"][0]["parameters"]["properties"]["file_id"] = {"type": "string"}
+    body["tools"][0]["parameters"]["properties"]["image_url"]["default"] = "password=FakeSecret12345"
+    assert bridge.evaluate(fixture.model_copy(update={"payload_utf8": json.dumps(body)}))[0].decision == "deny"
+
+
+def test_fixed_wss_protocol_ids_and_start_time_do_not_become_content(tmp_path):
+    bridge = _bridge(tmp_path)
+    body = {
+        "type": "response.create", "model": "fixture",
+        "input": [{"type": "message", "role": "user",
+                   "id": "msg_79d870c2-718d-471d-8baf-81e475ab4a67",
+                   "content": [{"type": "input_text", "text": "Hello"}]}],
+        "client_metadata": {"x-codex-ws-stream-request-start-ms": "1790000000005"},
+    }
+    template = _request({"model": "fixture", "input": "Hello"}, protocol="wss")
+    request = template.model_copy(update={"payload_utf8": json.dumps(body)})
+    allowed, audit = bridge.evaluate(request)
+    assert allowed.decision == "allow"
+    assert bridge.archive.read(audit["archive_record_id"])[1] == request.payload_utf8.encode()
+
+    # A non-protocol value in either field remains visible to content policy.
+    body["input"][0]["id"] = "password=FakeSecret12345"
+    assert bridge.evaluate(template.model_copy(update={"payload_utf8": json.dumps(body)}))[0].decision == "deny"
+    body["input"][0]["id"] = "msg_79d870c2-718d-471d-8baf-81e475ab4a67"
+    body["client_metadata"]["x-codex-ws-stream-request-start-ms"] = "password=FakeSecret12345"
+    assert bridge.evaluate(template.model_copy(update={"payload_utf8": json.dumps(body)}))[0].decision == "deny"
+
+
+def test_fixed_wss_embedded_turn_timestamp_is_not_a_card(tmp_path):
+    bridge = _bridge(tmp_path)
+    body = {
+        "type": "response.create", "model": "fixture", "input": "Hello",
+        "client_metadata": {"x-codex-turn-metadata": json.dumps({
+            "turn_started_at_unix_ms": 1790000000005,
+            "task": "Public synthetic test",
+        })},
+    }
+    template = _request({"model": "fixture", "input": "Hello"}, protocol="wss")
+    request = template.model_copy(update={"payload_utf8": json.dumps(body)})
+    allowed, audit = bridge.evaluate(request)
+    assert allowed.decision == "allow"
+    assert bridge.archive.read(audit["archive_record_id"])[1] == request.payload_utf8.encode()
+
+    body["client_metadata"]["x-codex-turn-metadata"] = json.dumps({
+        "turn_started_at_unix_ms": 1790000000005,
+        "task": "password=FakeSecret12345",
+    })
+    assert bridge.evaluate(template.model_copy(update={"payload_utf8": json.dumps(body)}))[0].decision == "deny"
+
+
+def test_fixed_flat_http_protocol_metadata_uses_same_scoring_view(tmp_path):
+    bridge = _bridge(tmp_path)
+    body = {"model": "fixture", "stream": True, "input": [{
+        "type": "message", "role": "user",
+        "id": "msg_79d870c2-718d-471d-8baf-81e475ab4a67",
+        "content": [{"type": "input_text", "text": "Hello"}],
+    }], "client_metadata": {"x-codex-turn-metadata": json.dumps({
+        "turn_started_at_unix_ms": 1790000000005,
+    })}}
+    assert bridge.evaluate(_request(body))[0].decision == "allow"
+    body["input"][0]["content"][0]["text"] = "password=FakeSecret12345"
+    assert bridge.evaluate(_request(body))[0].decision == "deny"
+
+    # Duplicate keys must not let JSON normalization discard an earlier secret.
+    body["input"][0]["content"][0]["text"] = "Hello"
+    body["client_metadata"]["x-codex-turn-metadata"] = (
+        '{"turn_started_at_unix_ms":"password=FakeSecret12345",'
+        '"turn_started_at_unix_ms":1790000000005}'
+    )
+    assert bridge.evaluate(_request(body))[0].decision == "deny"
+
+
+def test_inline_file_data_url_header_cannot_hide_sensitive_bytes(tmp_path):
+    bridge = _bridge(tmp_path)
+    template = {"model": "fixture", "input": [{"type": "input_file", "filename": "safe.txt",
+        "file_data": "data:text/plain;base64,SGVsbG8="}]}
+    assert bridge.evaluate(_request(template))[0].decision == "allow"
+
+    for header in ("data:text/plain;name=password=FakeSecret12345;base64,",
+                   "data:text/password=FakeSecret12345;base64,"):
+        template["input"][0]["file_data"] = header + "SGVsbG8="
+        assert bridge.evaluate(_request(template))[0].decision == "deny"

@@ -28,6 +28,18 @@
 #ifndef WSS_ENTRY_PREFIX_BYTES
 #define WSS_ENTRY_PREFIX_BYTES {0x55,0x56,0x57,0x53,0x48,0x83,0xec,0x68}
 #endif
+#ifndef WSS_SUCCESS_TAG
+#define WSS_SUCCESS_TAG 0x1c
+#endif
+#ifndef WSS_DENIED_TAG
+#define WSS_DENIED_TAG 0x0d
+#endif
+#ifndef HTTP_DENIED_TAG
+#define HTTP_DENIED_TAG 3
+#endif
+#ifndef HTTP_EMPTY_ERROR_STRING
+#define HTTP_EMPTY_ERROR_STRING 0
+#endif
 #define LIMIT (16u * 1024u * 1024u)
 #define DEADLINE_MS 2000
 #ifndef TTRACE_EXPECTED_HASH
@@ -268,6 +280,13 @@ static void *http_gate(void *result, void *request, void *headers, void *body) {
     if (readable(body, 65)) action = policy("model.request", "http", (void *)b[1], b[2]);
     if (!action) return original_http(result, request, headers, body);
     if(action==3){TerminateProcess(GetCurrentProcess(),76);return result;}
+#if HTTP_EMPTY_ERROR_STRING
+    /* Fixed desktop ABI: Rust's empty String representation owns no buffer.
+     * Never pass a Win32 HeapAlloc block to Rust's String destructor. */
+    drop_headers(headers);
+    uintptr_t *out = result;
+    out[0] = HTTP_DENIED_TAG; out[1] = 0; out[2] = 1; out[3] = 0;
+#else
     const char *reason = "Transpect: request denied by local policy";
     size_t length = strlen(reason);
     char *error = HeapAlloc(GetProcessHeap(), 0, length + 1);
@@ -276,7 +295,8 @@ static void *http_gate(void *result, void *request, void *headers, void *body) {
     } else memcpy(error, reason, length + 1);
     drop_headers(headers);
     uintptr_t *out = result;
-    out[0] = 3; out[1] = length ? length + 1 : 0; out[2] = (uintptr_t)error; out[3] = length;
+    out[0] = HTTP_DENIED_TAG; out[1] = length ? length + 1 : 0; out[2] = (uintptr_t)error; out[3] = length;
+#endif
     report_outcome(action);
     return result;
 }
@@ -284,7 +304,7 @@ static void *http_gate(void *result, void *request, void *headers, void *body) {
 static void *wss_gate(void *result, void *request) {
     void *returned = original_wss(result, request);
     uintptr_t *out = result;
-    if (out[0] != 0x1c) return returned;
+    if (out[0] != WSS_SUCCESS_TAG) return returned;
     int action = policy("model.request", "wss", (void *)out[2], out[3]);
     if (!action) return returned;
     if(action==3){TerminateProcess(GetCurrentProcess(),76);return returned;}
@@ -296,7 +316,7 @@ static void *wss_gate(void *result, void *request) {
     } else {
         memcpy((void *)out[2], reason, length + 1); out[3] = length;
     }
-    out[0] = 0x0d; /* ApiError::Stream(String), fixed-build layout. */
+    out[0] = WSS_DENIED_TAG; /* ApiError::Stream(String), fixed-build layout. */
     report_outcome(action);
     return returned;
 }
@@ -315,6 +335,10 @@ static DWORD WINAPI initialize(LPVOID unused) {
     const unsigned char wss_prefix[] = WSS_ENTRY_PREFIX_BYTES;
     if (memcmp(base + HTTP_RVA, http_prefix, sizeof(http_prefix)) ||
         memcmp(base + WSS_RVA, wss_prefix, sizeof(wss_prefix))) return 3;
+#ifdef DROP_HEADERS_PREFIX_BYTES
+    const unsigned char drop_prefix[] = DROP_HEADERS_PREFIX_BYTES;
+    if (memcmp(base + DROP_HEADERS_RVA, drop_prefix, sizeof(drop_prefix))) return 3;
+#endif
     drop_headers = (DropFn)(base + DROP_HEADERS_RVA);
     if (MH_Initialize() != MH_OK) return 4;
     if (MH_CreateHook(base + HTTP_RVA, http_gate, (LPVOID *)&original_http) != MH_OK ||

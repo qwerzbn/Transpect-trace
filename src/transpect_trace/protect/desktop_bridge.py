@@ -25,12 +25,26 @@ from .content_dlp import ContentDLPEngine, DLPVerdict
 
 
 _REFERENCE = re.compile(r"[A-Za-z0-9_-]{1,256}\Z")
-_DATA_URL = re.compile(r"data:[^\s,]{0,256};base64,", re.I)
+_DATA_URL = re.compile(r"data:([^;,\s]{1,128});base64,", re.I)
+_INLINE_MIME = frozenset((
+    "text/plain", "text/markdown", "text/csv", "text/x-python", "text/x-c",
+    "text/x-c++", "text/x-java-source", "application/json", "application/pdf",
+    "application/octet-stream",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+))
 _ANY_DATA_URL = re.compile(r"data:[^\s,]{0,1024},", re.I)
 _ATTACHMENT_TYPES = frozenset(("input_file", "file", "input_image", "image_url", "input_audio"))
 _FILE_KEYS = frozenset(("file_id", "file_data", "file_url", "file_path", "image_url", "image_base64"))
 _UNVERIFIED_HISTORY_KEYS = frozenset(("previous_response_id", "conversation_id", "conversation"))
 _SENSITIVE_FIELD = re.compile(r"(?i)(?:password|passwd|api[_-]?key|secret|access[_-]?token|client_secret|credential|密钥|口令)")
+_WIRE_MESSAGE_ID = re.compile(
+    r"msg_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z",
+    re.I,
+)
+_WIRE_START_MS = "x-codex-ws-stream-request-start-ms"
+_WIRE_TURN_METADATA = "x-codex-turn-metadata"
 PENDING_APPROVAL_TTL = timedelta(minutes=5)
 MAX_PENDING_APPROVALS = 1024
 
@@ -58,6 +72,67 @@ def _nested_field_context(value: object) -> str:
         if size > MAX_SNAPSHOT_BYTES:
             raise ValueError("nested context exceeds inspection limit")
     return "\n".join(parts)
+
+
+def _protocol_metadata_view(value: dict) -> dict:
+    """Omit verified Codex-generated IDs/timestamps from the DLP text view.
+
+    The encrypted archive keeps the exact serialized body. Only these
+    version-specific metadata shapes are omitted from content scoring; every
+    other value, including all user/developer text, stays in the inspection.
+    """
+    wss_shape = value.get("type") == "response.create"
+    http_shape = ("type" not in value and isinstance(value.get("model"), str)
+                  and isinstance(value.get("input"), list)
+                  and type(value.get("stream")) is bool)
+    if not (wss_shape or http_shape):
+        return value
+    view = value.copy()
+    messages = value.get("input")
+    if isinstance(messages, list):
+        view["input"] = [
+            {**item, "id": "<protocol-message-id>"}
+            if isinstance(item, dict)
+            and item.get("type") == "message"
+            and item.get("role") in {"system", "developer", "user", "assistant"}
+            and isinstance(item.get("id"), str)
+            and _WIRE_MESSAGE_ID.fullmatch(item["id"])
+            else item
+            for item in messages
+        ]
+    metadata = value.get("client_metadata")
+    if isinstance(metadata, dict):
+        filtered = metadata.copy()
+        started = metadata.get(_WIRE_START_MS)
+        if (isinstance(started, str) and re.fullmatch(r"\d{13}", started)
+                and 1_577_836_800_000 <= int(started) < 4_102_444_800_000):
+            filtered[_WIRE_START_MS] = "<protocol-start-ms>"
+        elif (type(started) is int and 1_577_836_800_000 <= started < 4_102_444_800_000):
+            filtered[_WIRE_START_MS] = "<protocol-start-ms>"
+        embedded = metadata.get(_WIRE_TURN_METADATA)
+        if isinstance(embedded, str) and len(embedded) <= 64 * 1024:
+            def unique_object(pairs):
+                result = {}
+                for key, item in pairs:
+                    if key in result:
+                        raise ValueError("duplicate embedded metadata field")
+                    result[key] = item
+                return result
+            try:
+                turn = json.loads(embedded, object_pairs_hook=unique_object)
+            except ValueError:
+                pass
+            else:
+                if isinstance(turn, dict):
+                    timestamp = turn.get("turn_started_at_unix_ms")
+                    if (type(timestamp) is int and
+                            1_577_836_800_000 <= timestamp < 4_102_444_800_000):
+                        filtered[_WIRE_TURN_METADATA] = json.dumps(
+                            {**turn, "turn_started_at_unix_ms": "<protocol-start-ms>"},
+                            ensure_ascii=False,
+                        )
+        view["client_metadata"] = filtered
+    return view
 
 
 @dataclass(frozen=True)
@@ -169,7 +244,8 @@ class DesktopDLPBridge:
         if not isinstance(name, str) or not isinstance(encoded, str):
             raise ValueError("inline file name or data unavailable")
         match = _DATA_URL.match(encoded)
-        if not match or len(encoded) > MAX_SNAPSHOT_BYTES * 2:
+        if (not match or match.group(1).casefold() not in _INLINE_MIME
+                or len(encoded) > MAX_SNAPSHOT_BYTES * 2):
             raise ValueError("unsupported inline file data")
         try:
             raw = base64.b64decode(encoded[match.end():], validate=True)
@@ -185,17 +261,32 @@ class DesktopDLPBridge:
         verdicts: list[DLPVerdict] = []
         nodes = 0
 
-        def walk(item: object, depth: int = 0) -> object:
+        def walk(item: object, depth: int = 0, *, tool_schema: bool = False,
+                 path: tuple[str, ...] = ()) -> object:
             nonlocal nodes
             nodes += 1
             if nodes > 200_000 or depth > 64:
                 raise ValueError("request structure exceeds inspection limit")
             if isinstance(item, list):
-                return [walk(child, depth + 1) for child in item]
+                return [walk(child, depth + 1, tool_schema=tool_schema, path=path)
+                        for child in item]
             if isinstance(item, str) and _ANY_DATA_URL.search(item):
                 raise ValueError("untyped inline file content")
             if not isinstance(item, dict):
                 return item
+            if tool_schema:
+                # Function parameter schemas name fields such as image_url or
+                # file_id. A schema definition is not an uploaded file, but
+                # scalar references or typed attachment objects inside it are
+                # still rejected. Its text remains in the DLP inspection view.
+                if isinstance(item.get("type"), str) and item["type"] in _ATTACHMENT_TYPES:
+                    raise ValueError("attachment object in tool definition")
+                if any(key in _FILE_KEYS | _UNVERIFIED_HISTORY_KEYS
+                       and not isinstance(child, dict)
+                       for key, child in item.items()):
+                    raise ValueError("file reference in tool definition")
+                return {key: walk(child, depth + 1, tool_schema=True,
+                                  path=path + (key,)) for key, child in item.items()}
             if _UNVERIFIED_HISTORY_KEYS.intersection(item):
                 raise ValueError("unverified server-side history reference")
             kind = item.get("type")
@@ -234,7 +325,9 @@ class DesktopDLPBridge:
                 return {"type": kind, "filename": filename, "detail": item.get("detail", "auto")}
             if _FILE_KEYS.intersection(item):
                 raise ValueError("unrecognized attachment shape")
-            return {key: walk(child, depth + 1) for key, child in item.items()}
+            return {key: walk(child, depth + 1,
+                              tool_schema=path + (key,) in {("tools",), ("response", "tools")},
+                              path=path + (key,)) for key, child in item.items()}
 
         return walk(value), verdicts
 
@@ -293,7 +386,8 @@ class DesktopDLPBridge:
             # Inspect the entire serialized message, including WSS envelope
             # fields outside `response`; those bytes also cross the wire.
             redacted, attachments = self._attachments(value)
-            text = inspection_text(redacted) + "\n" + _nested_field_context(redacted)
+            scored = _protocol_metadata_view(redacted)
+            text = inspection_text(scored) + "\n" + _nested_field_context(scored)
             verdict = self.dlp.inspect_text(text)
             if verdict.decision != "ALLOW" or any(item.decision != "ALLOW" for item in attachments):
                 reason = "SENSITIVE_OR_UNINSPECTABLE_CONTENT"

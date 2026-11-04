@@ -41,6 +41,42 @@ _UNINSPECTABLE_PARTS = (
     "/media/", "/embeddings/", "/externallinks/", "/activex/",
     "/oleobjects/", "vbaproject", "customxml/",
 )
+_TEXT_NODES = frozenset(("t", "v", "f", "instrText", "delText"))
+_TEXT_GROUPS = frozenset(("p", "si", "is", "c", "root"))
+_TEXT_ATTRIBUTES = frozenset((
+    "title", "description", "descr", "name", "tooltip", "keywords", "subject",
+))
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _ooxml_text(root, part_name: str) -> list[str]:
+    """Extract independent fields and adjacent runs without joining XML IDs.
+
+    Whole-part concatenation turns unrelated style numbers, colors and
+    relationship IDs into apparent card numbers and high-entropy secrets.
+    """
+    values: list[str] = []
+    metadata = part_name.startswith("docprops/")
+    for element in root.iter():
+        name = _local_name(element.tag)
+        if (element.text and element.text.strip()
+                and (name in _TEXT_NODES or metadata)):
+            values.append(element.text)
+        for key, value in element.attrib.items():
+            field = _local_name(key).casefold()
+            if (value and (field in _TEXT_ATTRIBUTES or
+                           any(word in value.casefold() for word in
+                               ("password=", "secret=", "api_key=", "token=")))):
+                values.append(f"{field}={value}")
+        if name in _TEXT_GROUPS:
+            runs = [child.text for child in element.iter() if child is not element
+                    and _local_name(child.tag) in _TEXT_NODES and child.text]
+            if len(runs) > 1:
+                values.append("".join(runs))
+    return values
 
 
 def _bounded_text(text: str) -> str:
@@ -147,13 +183,11 @@ def _extract_ooxml(data: bytes, extension: str) -> str:
                     for relation in root.iter():
                         if relation.attrib.get("TargetMode", "").casefold() == "external":
                             raise UninspectableFile("Office external relationship")
-                values = [element.text for element in root.iter() if element.text and element.text.strip()]
-                values.extend(attribute for element in root.iter() for attribute in element.attrib.values()
-                              if attribute and not attribute.startswith(("http://schemas.", "http://www.w3.org/")))
+                values = _ooxml_text(root, lower)
                 if values:
-                    # Both views matter: Office can split a key between adjacent text runs.
-                    chunks.append(" ".join(values))
-                    chunks.append("".join(values))
+                    # Each value remains delimited; only runs in one paragraph,
+                    # cell or shared string are additionally joined above.
+                    chunks.extend(values)
                 if sum(len(value.encode("utf-8")) for value in chunks) > MAX_EXTRACTED_BYTES:
                     raise UninspectableFile("Office extracted text limit")
             return _bounded_text("\n".join(chunks))
