@@ -120,6 +120,50 @@ def test_host_targets_accept_only_dedicated_profile_backend_copy(monkeypatch):
                                  None, DEDICATED, PROTECTED)
 
 
+def test_discovery_returns_only_one_verified_dedicated_process_pair(monkeypatch):
+    rows = [
+        {"Pid": 100, "ParentPid": 1, "Name": "ChatGPT.exe", "Sid": DEDICATED},
+        {"Pid": 200, "ParentPid": 100, "Name": "codex.exe", "Sid": DEDICATED},
+        {"Pid": 300, "ParentPid": 1, "Name": "ChatGPT.exe", "Sid": PROTECTED},
+        {"Pid": 400, "ParentPid": 300, "Name": "codex.exe", "Sid": PROTECTED},
+    ]
+    calls = []
+
+    def verify(_adapter, _package, desktop_pid, backend_pid, network_pid,
+               expected_sid, protected_sid):
+        calls.append((desktop_pid, backend_pid, network_pid, expected_sid, protected_sid))
+        if desktop_pid != 100 or backend_pid not in {200, 201}:
+            raise ValueError("unverified candidate")
+        return {"desktop": {}, "backend": {}}
+
+    monkeypatch.setattr(host, "verify_host_targets", verify)
+    monkeypatch.setattr(host, "process_identity", lambda pid: {"image_path": f"pinned-{pid}"})
+    monkeypatch.setattr(host, "verify_backend_build", lambda *_: {"version": "fixed"})
+    assert host.select_verified_pair(rows, adapter(), {}, DEDICATED, PROTECTED) == {
+        "desktop_pid": 100, "backend_pid": 200,
+    }
+    assert calls == [(100, 200, None, DEDICATED, PROTECTED)]
+
+    rows.append({"Pid": 201, "ParentPid": 100, "Name": "codex.exe", "Sid": DEDICATED})
+    with pytest.raises(ValueError, match="exactly one verified"):
+        host.select_verified_pair(rows, adapter(), {}, DEDICATED, PROTECTED)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process enumeration")
+def test_discovery_rejects_invalid_or_duplicate_process_rows(monkeypatch):
+    rows = [{"Pid": 100, "ParentPid": 1, "Name": "ChatGPT.exe", "Sid": DEDICATED}]
+    monkeypatch.setattr(host.subprocess, "run", lambda *a, **kw:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(rows)))
+    assert host.enumerate_session_processes() == rows
+    rows.append(dict(rows[0]))
+    with pytest.raises(ValueError, match="duplicate"):
+        host.enumerate_session_processes()
+    rows[1]["Pid"] = 101
+    rows[1]["Name"] = "other.exe"
+    with pytest.raises(ValueError, match="invalid dedicated process row"):
+        host.enumerate_session_processes()
+
+
 def test_copied_backend_requires_fixed_signer_and_version(monkeypatch):
     results = iter([
         SimpleNamespace(returncode=0, stdout=json.dumps({

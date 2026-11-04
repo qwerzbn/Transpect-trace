@@ -225,6 +225,82 @@ def verify_host_targets(adapter: dict, package: dict[str, str], desktop_pid: int
     return targets
 
 
+def enumerate_session_processes() -> list[dict]:
+    """List only process IDs, names, parents and owners in this login session."""
+    if os.name != "nt":
+        raise RuntimeError("host desktop discovery requires Windows")
+    command = (
+        "$ErrorActionPreference='Stop'; "
+        "$session=[Diagnostics.Process]::GetCurrentProcess().SessionId; "
+        "$rows=@(Get-CimInstance Win32_Process -Filter "
+        "\"Name='ChatGPT.exe' OR Name='codex.exe'\" | "
+        "Where-Object { $_.SessionId -eq $session } | ForEach-Object { "
+        "$owner=Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid; "
+        "[pscustomobject]@{Pid=[int]$_.ProcessId;ParentPid=[int]$_.ParentProcessId;"
+        "Name=[string]$_.Name;Sid=[string]$owner.Sid} }); "
+        "if ($rows.Count -gt 64) { exit 3 }; "
+        "ConvertTo-Json -InputObject $rows -Compress"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15, check=False,
+        env=windows_powershell_env(),
+    )
+    if result.returncode or not result.stdout.strip():
+        raise ValueError("cannot enumerate dedicated login-session processes")
+    rows = json.loads(result.stdout)
+    if not isinstance(rows, list) or len(rows) > 64:
+        raise ValueError("invalid dedicated process enumeration")
+    for row in rows:
+        if (not isinstance(row, dict)
+                or type(row.get("Pid")) is not int or row["Pid"] <= 0
+                or type(row.get("ParentPid")) is not int or row["ParentPid"] < 0
+                or row.get("Name") not in {"ChatGPT.exe", "codex.exe"}
+                or not isinstance(row.get("Sid"), str)):
+            raise ValueError("invalid dedicated process row")
+    if len({row["Pid"] for row in rows}) != len(rows):
+        raise ValueError("duplicate dedicated process ID")
+    return rows
+
+
+def select_verified_pair(rows: list[dict], adapter: dict, package: dict[str, str],
+                         expected_sid: str, protected_sid: str) -> dict[str, int]:
+    """Fail if zero or multiple pinned desktop/app-server pairs are running."""
+    own = [row for row in rows if row["Sid"] == expected_sid]
+    desktops = {row["Pid"]: row for row in own if row["Name"] == "ChatGPT.exe"}
+    verified: list[dict[str, int]] = []
+    for backend in own:
+        if backend["Name"] != "codex.exe" or backend["ParentPid"] not in desktops:
+            continue
+        desktop_pid, backend_pid = backend["ParentPid"], backend["Pid"]
+        try:
+            verify_host_targets(adapter, package, desktop_pid, backend_pid,
+                                None, expected_sid, protected_sid)
+            verify_backend_build(process_identity(backend_pid)["image_path"], adapter)
+        except Exception:
+            # A process may exit during discovery; no unverified PID is returned.
+            continue
+        verified.append({"desktop_pid": desktop_pid, "backend_pid": backend_pid})
+    if len(verified) != 1:
+        raise ValueError("expected exactly one verified dedicated desktop/app-server pair")
+    return verified[0]
+
+
+def discover_host_pair(adapter_path: Path, msix_path: Path,
+                       expected_sid: str, protected_sid: str) -> dict:
+    """Read-only process discovery before an observation-only text trace."""
+    require_dedicated_user(expected_sid, protected_sid)
+    adapter = load_desktop_adapter(adapter_path.resolve(strict=True), require_validated=False)
+    verify_archived_msix(msix_path, adapter)
+    package = registered_package(adapter)
+    pair = select_verified_pair(enumerate_session_processes(), adapter, package,
+                                expected_sid, protected_sid)
+    return {"schema": "transpect.desktop-host-discovery/1.0",
+            "status": "VerifiedSinglePair", "observation_only": True,
+            "package_version": adapter["package_version"], **pair}
+
+
 @contextmanager
 def hold_processes(targets: dict[str, dict]):
     """Keep process objects open so a checked PID cannot be silently reused."""
@@ -493,6 +569,11 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser("prepare", help="Create synthetic text and upload fixtures")
     prepare.add_argument("--output", type=Path, required=True)
+    discover = sub.add_parser("discover", help="Find one verified dedicated desktop/app-server pair")
+    discover.add_argument("--adapter", type=Path, required=True)
+    discover.add_argument("--msix", type=Path, required=True)
+    discover.add_argument("--expected-sid", required=True)
+    discover.add_argument("--protected-sid", required=True)
     trace = sub.add_parser("trace", help="Observation only on the dedicated host user")
     trace.add_argument("--observation-only", action="store_true", required=True)
     trace.add_argument("--adapter", type=Path, required=True)
@@ -510,6 +591,9 @@ def main() -> None:
     enter_repository()
     if args.command == "prepare":
         print(json.dumps(prepare_fixtures(args.output), indent=2))
+    elif args.command == "discover":
+        print(json.dumps(discover_host_pair(args.adapter, args.msix,
+                                            args.expected_sid, args.protected_sid), indent=2))
     else:
         report = run_trace(args)
         print(json.dumps({key: report[key] for key in (

@@ -21,6 +21,20 @@ uv run --no-sync python scripts/probe_desktop_paths_host.py prepare `
 
 按 [桌面适配器说明](../desktop-guard-adapter.md)使用 `scripts/discover_desktop_guard.py` 对**相同归档 MSIX 和后端**生成静态候选。启动专用用户的固定版桌面端，在专用用户会话查明 `ChatGPT.exe`、其子进程 `codex.exe app-server` 和可选 NetworkService 的 PID。然后分别以新的空目录运行 `idle`、`text`、`upload` 三次：
 
+本机已保存固定版候选适配器。专用账户启动桌面端后，可先用 `discover` 自动查找**同一登录会话中唯一一组**已核对 SID、父子关系、文件哈希及版本的桌面主进程与 `app-server`；它只读，不附加进程，也不发送模型请求。无需手工从任务管理器挑选 PID：
+
+```powershell
+$demoBase = 'D:\code\transpect-trace'
+$demoPython = "$demoBase\.venv\Scripts\python.exe"
+& $demoPython "$demoBase\scripts\probe_desktop_paths_host.py" discover `
+  --adapter "$demoBase\deploy\guard\desktop-candidate-26.1029.7803.0.json" `
+  --msix "$demoBase\runs\desktop-vm\ChatGPT-x64.msix" `
+  --expected-sid 'S-1-5-21-2341826845-1812322924-2265560838-1005' `
+  --protected-sid 'S-1-5-21-2341826845-1812322924-2265560838-1001'
+```
+
+仅当输出 `status: VerifiedSinglePair` 时，将 `desktop_pid`、`backend_pid` 用于后续观察。若尚未启动 `app-server` 或有多组候选，命令会拒绝给出 PID；先检查桌面端状态，不要改用 `zbn` 的进程。此自动发现只覆盖桌面主进程和 `app-server`，NetworkService 若需观察仍须独立核对。
+
 ```powershell
 uv run --no-sync python scripts/probe_desktop_paths_host.py trace --observation-only `
   --msix C:\demo\archive\ChatGPT-x64.msix `
