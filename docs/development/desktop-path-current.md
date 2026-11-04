@@ -57,3 +57,13 @@ uv run --no-sync python scripts/probe_desktop_paths_current.py trace `
 随后用只读的 `scripts/probe_desktop_current_thread_metadata.py` 检查固定版请求中的任务归属。第三轮合成消息经跨任务发送工具进入测试任务，探针在 HTTP 候选点观察到一条 171,558 字节请求：`client_metadata.thread_id` 与固定测试任务 UUID 相等，标记位于 `function_call_output.output`，不在 `role=user.content`；WSS 未见该标记。两个 Hook 均已安装，错误数为零。脚本只保存这三个布尔结果、长度和哈希，不保存任务 ID 或正文。报告为 `metadata_attributed_to_test_thread`，`runs/desktop-current/thread-trace-20261104-01/summary.json` 的 SHA-256 为 `85B2DB20247190AA044F207D3228A85DB8877D88287DE3DCEF5AD03730596916`。此结果可用于后续**限定合成测试请求**的归因，仍不是阻断或完整路径覆盖的证明。
 
 第四轮将该任务 ID 与 `function_call_output` 标记作为共同条件，短时运行修订后的拒绝探针。当前桌面端的 HTTP 候选点观察到 6 次归属于测试任务的合成请求及 6 次错误返回构造，长度为 172,465 字节及后续重试的 172,702 字节；未见 WSS 目标命中、非目标标记或探针错误。测试任务报告 `stream disconnected`，共享后端 PID 仍存活。报告状态是 `one_candidate_denial_observed_without_origin_proof`，`runs/desktop-current/deny-trace-20261104-03/summary.json` 的 SHA-256 为 `C484D3434B01BD422BE27137262EC88A35F9DD75D369018DC7FDF84C4FAAFDB5`。这验证了该次合成请求在当前客户端 HTTP 候选点的拒绝动作，**没有**把正文交给 DLP 或加密归档，也没有独立服务端接收证据；WSS、附件及 Agent 工具直连仍未覆盖。
+
+## 当前客户端的合成 DLP 联调
+
+`scripts/probe_desktop_current_dlp_bridge.py` 将固定版 HTTP/WSS 候选点接入 `DesktopDLPBridge`。探针只对根部 `client_metadata.thread_id` 等于固定 Local 测试任务、且 `input` 中同一条 `function_call_output` 或 `role=user` 项含本轮合成标记的完整请求启动同步判定；其余请求不导出正文并原样通过。进程内检查 JSON 重复键，Python 端再次验证任务 ID、来源、长度和 SHA-256。目标请求先加密归档并回读核对，再做本地四层判定；`REVIEW`、`BLOCK`、超时和检查失败均拒绝。归档是**完整模型请求**，可能包含系统及开发者指令和测试任务历史，不能把整个归档称作合成文本。现用账户下的 DPAPI 加密也不能隔离同一账户的 Agent 进程。
+
+2026 年 11 月 4 日，在当前客户端自动向固定测试任务发送一条带 `password=FakeSecret12345` 的合成请求。两个 Hook 均已安装；HTTP 候选点记录 6 条目标请求，6 条均完成加密归档回读、命中 `ASSIGNED_SECRET` 和 `ENTROPY_TOKEN`，并逐条对应 Native 拒绝事件。目标放行数、未决数和探针错误数均为 0；固定测试任务出现 `stream disconnected`，后端进程仍存活。报告位于 `runs/desktop-current/dlp-trace-20261104-01/summary.json`，SHA-256 为 `5DAAE2AAE23397784632A93A42717AD3EEFAD3B2561F81A654EA67F5B5F290F9`。这些结果证明**这次已归因的合成 HTTP 候选调用**经过“归档→识别→Native 拒绝”；没有受控源站逐字节接收证据，也没有验证 WSS 目标调用。
+
+随后在同一个测试任务提交另一条不带密钥的合成文字，6 条 HTTP 目标请求仍被拒绝。回读加密归档后确认：每条完整请求的 `input` 历史中仍有上一轮的假密钥，因而 `ASSIGNED_SECRET` 再次命中。这里不能把“当前新输入不含密钥”直接当作一个良性请求被误判；本策略检查的是**完整待发送正文**，其中包含历史内容。第二轮报告位于 `runs/desktop-current/dlp-trace-20261104-02/summary.json`，SHA-256 为 `81E08C91A5315D235097A5C086BA85670D90A400A0E8B22EB580B972F254C82B`。当前客户端的独立、无敏感历史的正常请求放行仍未验证。
+
+两轮报告均保持 `coverage_status=unvalidated` 和 `remote_origin_zero_bytes_verified=false`。未能可靠归属到固定测试任务的请求会透传；没有建立桌面附件原字节 Hook、当前账户 Agent 工具进程的独立网络边界或常驻控制器。此前独立 CLI 的受控源站与 MXC 结果不能外推为现用桌面端的全路径保证。

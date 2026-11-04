@@ -104,4 +104,6 @@ def test_default_evaluation_is_full_and_marks_policy_truth_unavailable(monkeypat
     assert not report["blind_holdout"]
     assert not report["policy_truth_available_for_public_corpora"]
     assert not report["live_enforcement_verified"]
+    assert report["public_corpus_registrations_loaded"] is False
+    assert report["synthetic_fixture_registrations_loaded"] is True
     assert "redacted_proxy_decisions" in report["datasets"]["gretel_en"]

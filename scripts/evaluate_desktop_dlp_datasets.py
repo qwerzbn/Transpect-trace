@@ -311,8 +311,12 @@ def evaluate(paths: dict[str, Path], *, per_dataset: int = 0, seed: str = "2026-
         "selection_mode": "full" if per_dataset == 0 else "hash_ranked_sample",
         "blind_holdout": False, "policy_truth_available_for_public_corpora": False,
         "live_enforcement_verified": False,
+        "public_corpus_registrations_loaded": False,
+        "synthetic_fixture_registrations_loaded": True,
         "interpretation": ("These corpora contain annotated PII, including weak entities such as names. "
                            "ALLOW is not automatically a policy error; per-label rates are diagnostic. "
+                           "Public corpora use an unregistered engine, so EDM and fingerprint results "
+                           "apply only to the separate synthetic fixtures. "
                            "Redacted counterparts remove annotated values and provide only an approximate "
                            "false-positive diagnostic because unannotated sensitive content may remain. "
                            "These corpora were used during development, so this is not a blind holdout. "

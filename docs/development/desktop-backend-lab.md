@@ -45,4 +45,4 @@ Frida 附加与脚本载入运行在独立子进程中，主程序等待就绪�
 | 合成密钥 `BLOCK` | `runs/desktop-backend-lab/wss-deny-0e7c013b/summary.json` | `4594b4619b8dea3c00825be6c0623f64f86add58b1939c98860036a881da5751` |
 | stub 放行对照 | `runs/desktop-backend-lab/wss-deny-a63284a4/summary.json` | `a78e00bd56fd690b77d514076c2c9e8ccab95461452812a99a70ea263012de97` |
 
-报告只包含路径、长度、哈希、判定、规则编号与错误类型；正文经 Windows DPAPI 保护的密钥和 AES-GCM 加密归档。此隔离实验的模型进程与归档进程仍在同一 Windows 用户下，不能把加密落盘当作对该用户进程的访问隔离；正式部署还需独立控制账户。临时 TLS wire、证书私钥和会话密钥在实验结束时删除。`native/guard/guard.c` 已加入该固定版所需的 WSS 标签、HTTP 空 String 和 HeaderMap 入口字节检查编译宏，同时保留旧 CLI 构建默认值。桌面候选适配器仍标记为 `candidate_unvalidated`，构建脚本拒绝用它生成桌面 DLL。桌面 UI 的真实模型路径、附件上传和 WFP 网络规则尚未由本实验验证。
+报告只包含路径、长度、哈希、判定、规则编号与错误类型；正文经 Windows DPAPI 保护的密钥和 AES-GCM 加密归档。此隔离实验的模型进程与归档进程仍在同一 Windows 用户下，不能把加密落盘当作对该用户进程的访问隔离；正式部署还需独立控制账户。归档在 7 天后拒绝读取，并在启动或后续活动时清理；闲置期间尚无定时物理删除。临时 TLS wire、证书私钥和会话密钥在实验结束时删除。`native/guard/guard.c` 已加入该固定版所需的 WSS 标签、HTTP 空 String 和 HeaderMap 入口字节检查编译宏，同时保留旧 CLI 构建默认值。桌面候选适配器仍标记为 `candidate_unvalidated`，构建脚本拒绝用它生成桌面 DLL。桌面 UI 的真实模型路径、附件上传和 WFP 网络规则尚未由本实验验证。
