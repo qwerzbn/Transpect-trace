@@ -1,8 +1,8 @@
-"""Create an unvalidated desktop Guard candidate from archived VM binaries.
+"""Create an unvalidated desktop Guard candidate from archived official binaries.
 
 This command never attaches to a process and never promotes a static RVA to a
-working gate.  The VM's dynamic HTTP, WSS, and attachment probes must create
-separate evidence before a desktop adapter can be activated.
+working gate. Dynamic HTTP, WSS, and attachment probes must create separate
+evidence before a desktop adapter can be activated.
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def candidate_adapter(msix: dict, backend_discovery: dict, backend_version: str)
               "coverage": {name: {"validated": False, "evidence_sha256": None}
                            for name in ("model.http", "model.wss", "attachment.upload")},
               "status": "candidate_unvalidated", "production_ready": False,
-              "validation_required": ["VM desktop process ancestry and file hashes",
+              "validation_required": ["dedicated desktop process ancestry and file hashes",
                                       "actual model HTTP and WSS path coverage",
                                       "HTTP/WSS argument, buffer and error ABI",
                                       "HTTP owned headers cleanup RVA",

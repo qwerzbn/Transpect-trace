@@ -1,0 +1,57 @@
+{
+  "schema": "transpect.guard.desktop-adapter/1.0",
+  "package_name": "OpenAI.Codex",
+  "package_version": "26.1029.7803.0",
+  "package_publisher": "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B",
+  "package_full_name": "OpenAI.Codex_26.1029.7803.0_x64__2p2nqsd0c76g0",
+  "package_sha256": "19487892b7e27c74e75c6422088e91b35b4291ed485045f82a1984a13b22d128",
+  "desktop_image_sha256": "74dcbc67421c5d5406ea5e4cc80d9c8d8a05d0df62f1d7be5690f090f182e71f",
+  "package_signer_thumbprint": "b0429f3569607833179400e29d6d641b363ca6a4",
+  "architecture": "windows-x64",
+  "backend_version": "codex-cli 0.166.0-alpha.6",
+  "binary_sha256": "925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99",
+  "modes": [
+    "app-server"
+  ],
+  "hooks": [
+    {
+      "layer": "http_encoded_body_preparation",
+      "rva": "0xb117de0",
+      "entry_prefix_hex": "5541574156415541545657534881ece8",
+      "scope": "candidate HTTP JSON body",
+      "owned_headers_drop_rva": "needs_dynamic_validation",
+      "abi_compatible": false
+    },
+    {
+      "layer": "wss_request_serialization",
+      "rva": "0x41e3330",
+      "entry_prefix_hex": "5541574156415541545657534881ecd8",
+      "scope": "candidate WSS response.create",
+      "abi_compatible": false
+    }
+  ],
+  "coverage": {
+    "model.http": {
+      "validated": false,
+      "evidence_sha256": null
+    },
+    "model.wss": {
+      "validated": false,
+      "evidence_sha256": null
+    },
+    "attachment.upload": {
+      "validated": false,
+      "evidence_sha256": null
+    }
+  },
+  "status": "candidate_unvalidated",
+  "production_ready": false,
+  "validation_required": [
+    "dedicated desktop process ancestry and file hashes",
+    "actual model HTTP and WSS path coverage",
+    "HTTP/WSS argument, buffer and error ABI",
+    "HTTP owned headers cleanup RVA",
+    "desktop attachment byte capture before upload",
+    "denied origin receives zero body bytes for every path"
+  ]
+}

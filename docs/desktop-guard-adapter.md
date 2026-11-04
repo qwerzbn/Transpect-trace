@@ -4,7 +4,7 @@
 
 本轮归档的官方 x64 包版本为 `26.1029.7803.0`，MSIX SHA-256 为 `19487892b7e27c74e75c6422088e91b35b4291ed485045f82a1984a13b22d128`。清单同时固定 `app/ChatGPT.exe` 的 SHA-256 `74dcbc67421c5d5406ea5e4cc80d9c8d8a05d0df62f1d7be5690f090f182e71f`、`app/resources/codex.exe` 的 SHA-256 `925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99`，以及后端版本 `codex-cli 0.166.0-alpha.6`。发现程序要求 Windows 验签为 `Valid`、签名证书主题与包清单 Publisher 都为 `CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B`，证书 SHA-1 指纹为 `B0429F3569607833179400E29D6D641B363CA6A4`。证书或二进制换版都需要重新审查适配器。
 
-## 在独立 Windows 虚拟机中生成候选
+## 生成固定版本候选
 
 先保存官方签名的 x64 MSIX 与该安装启动的后端二进制，取得 `Get-AppxPackage OpenAI.Codex` 的 `PackageFullName`。以下命令分析归档二进制、运行该后端的 `--version` 并写候选清单，不接触桌面应用的运行进程：
 
@@ -18,9 +18,9 @@ uv run --no-sync python scripts/discover_desktop_guard.py `
 
 工具先检查 MSIX 签名与包身份，再记录包、桌面可执行文件和后端的 SHA-256，并用 PE 字符串锚点寻找 HTTP/WSS **候选** RVA。它不会推断桌面附件上传函数或假定桌面请求经过 CLI 的旧 Hook。
 
-对该归档后端的离线静态扫描找到 HTTP body 候选 RVA `0xb117de0`、WSS serialization 候选 RVA `0x41e3330`。这只能说明二进制中存在相似函数，不能说明桌面界面提交的实际请求经过这些地址。
+对该归档后端的离线静态扫描找到 HTTP body 候选 RVA `0xb117de0`、WSS serialization 候选 RVA `0x41e3330`。在[归档后端隔离实验](development/desktop-backend-lab.md)中，合成请求经过 HTTP 候选入口并到达不转发的本地接收器；这仍不能说明桌面界面提交的实际请求经过相同地址。
 
-虚拟机内的研究探测步骤见[发送路径动态探测](development/desktop-path-trace.md)。探测报告只记录候选命中、合成标记缓冲区哈希和附件读写调用栈；不自动将候选适配器提升为 `validated`。
+本机独立账户的只读研究步骤见[本机准备](development/desktop-host.md)和[本机发送路径观察](development/desktop-path-host.md)；原虚拟机步骤见[虚拟机发送路径探测](development/desktop-path-trace.md)。探测报告只记录候选命中、合成标记缓冲区哈希和附件读写调用栈；不自动将候选适配器提升为 `validated`。固定版打包代码中，本地路径附件可能交给后端读取，界面选取文件还可能先暂存或复制，见[附件静态检查](development/desktop-attachment-static.md)。实际流程仍待桌面端动态确认。
 
 ## 附件原始字节的本地判定协议
 
@@ -32,7 +32,7 @@ uv run --no-sync python scripts/discover_desktop_guard.py `
 
 ## 动态验证和启用条件
 
-在该虚拟机中，逐项验证 `model.http`、`model.wss`、`attachment.upload` 的实际调用路径、原始字节完整性、函数参数与拒绝后的返回布局。每项需要保存可复核的动态证据，并用不转发的受控源站确认拒绝时正文到达字节数为零。只有在确认 HTTP 的 owned-headers 清理地址、两个模型 Hook 的 ABI，以及附件上传进程与发送前 Hook 后，才可将清单标为 `validated` 并填入各路径证据摘要。当前仓库**没有**完成这些桌面动态验证，也没有桌面附件上传 Hook 实现。
+现有强制执行控制器和 WFP 封装仍限定在独立虚拟机。本机独立账户方案目前只完成安装预检、静态候选和只读观察工具，**还没有本机 WFP 默认拒绝、网络许可或桌面阻断能力**。后续必须逐项验证 `model.http`、`model.wss`、`attachment.upload` 的实际调用路径、原始字节完整性、函数参数与拒绝后的返回布局。每项需要保存可复核的动态证据，并用不转发的受控源站确认拒绝时正文到达字节数为零。只有在确认 HTTP 的 owned-headers 清理地址、两个模型 Hook 的 ABI，以及附件上传进程与发送前 Hook 后，才可将清单标为 `validated` 并填入各路径证据摘要。当前仓库**没有**完成这些桌面动态验证，也没有桌面附件上传 Hook 实现。
 
 | 外发路径 | 已有代码 | 必需的独立实测 | 当前可否放行 |
 | --- | --- | --- | --- |
@@ -42,7 +42,7 @@ uv run --no-sync python scripts/discover_desktop_guard.py `
 | 模型正文里的内联文件或 `file_id` | 桥接层能检查内联字节；引用只接受已批准快照 | 用真实桌面附件流程证明引用与预检文件一一绑定；未知引用拒绝 | 尚不能作为独立附件上传保护 |
 | Agent 子进程直连 | WFP 专用 SID 默认拒绝组件已实现 | 在虚拟机测试 TCP/UDP、IPv4/IPv6、子进程与控制器退出时的实际到达字节 | 仅在 VM 规则实测后 |
 
-**开放网络许可的全部条件：** 固定 MSIX 与后端哈希匹配；专用低权限账户的 WFP 出站和入站默认拒绝已先于桌面端启动；模型 HTTP/WSS 及附件三条路径都持有该固定版本的动态证据；模型 DLL、桌面附件 Hook 和本地判定服务均实时就绪；只对已确认的进程和字面 IP/端口发放短时许可。任一项失败即保持默认拒绝；新增的 WSS 类型、文件流或重试路径在验证前同样拒绝。
+**现有虚拟机方案开放网络许可的全部条件：** 固定 MSIX 与后端哈希匹配；专用低权限账户的 WFP 出站和入站默认拒绝已先于桌面端启动；模型 HTTP/WSS 及附件三条路径都持有该固定版本的动态证据；模型 DLL、桌面附件 Hook 和本地判定服务均实时就绪；只对已确认的进程和字面 IP/端口发放短时许可。任一项失败即保持默认拒绝；新增的 WSS 类型、文件流或重试路径在验证前同样拒绝。本机方案须先实现并验证等效的独立账户网络边界，不能直接套用虚拟机的就绪结论。
 
 **目的地校验缺口：** 当前模型 Hook 发给本地判定服务的 `destination` 固定为 `null`。HTTP 的 `request` 参数与 WSS 连接对象尚未验证可安全读取主机名，因此不能在 C 代码中猜测结构偏移来声称“只 Hook 模型域名”。WFP 目前只能把网络许可缩小到固定进程和字面 IP/端口；它不能分辨同一 TLS 目的地上的其他请求正文。虚拟机动态验证必须证明所有被许可的内容发送路径都经过对应 Hook，或者保持该进程离线。只有取得经验证的请求/连接布局后，才能在 GuardRequest 中提供可核对的目的地字段。
 
