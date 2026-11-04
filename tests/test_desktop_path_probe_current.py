@@ -77,15 +77,38 @@ def test_live_observer_requires_explicit_flags_before_accessing_processes():
                                           observation_only=False))
 
 
-def test_only_model_marker_metadata_is_retained():
-    assert current._safe_model_event({"kind": "candidate_entry", "hook": "model.http"}) is None
+def test_only_minimal_model_call_metadata_and_marker_matches_are_retained():
+    entry = current._safe_model_event({"kind": "candidate_entry", "hook": "model.http",
+                                       "caller": {"module": "codex.exe", "rva": "0x111"},
+                                       "thread_id": 42, "raw_body": "PRIVATE"})
+    assert set(entry) == {"kind", "role", "hook", "observed_unix_ns"}
+    assert entry["kind"] == "candidate_entry"
+    assert current._safe_model_event({"kind": "candidate_entry", "hook": "ReadFile"}) is None
     assert current._safe_model_event({"kind": "marker_buffer", "hook": "ReadFile",
                                       "sha256": "a" * 64}) is None
+    failed = current._safe_model_event({"kind": "read_hypothesis_failed",
+                                        "hook": "model.wss", "stage": "hypothesized-wss-serialized",
+                                        "raw_body": "PRIVATE"})
+    assert set(failed) == {"kind", "role", "hook", "stage", "observed_unix_ns"}
     event = current._safe_model_event({"kind": "marker_buffer", "hook": "model.http",
                                        "sha256": "a" * 64, "raw_body": "PRIVATE"})
     assert event["kind"] == "marker_buffer"
     assert event["hook"] == "model.http"
     assert "raw_body" not in event
+
+
+def test_candidate_summary_keeps_counts_and_receive_time_without_request_attribution():
+    rows = [{"kind": "candidate_entry", "hook": "model.http", "observed_unix_ns": 30},
+            {"kind": "candidate_entry", "hook": "model.http", "observed_unix_ns": 10},
+            {"kind": "candidate_entry", "hook": "model.wss", "observed_unix_ns": 20},
+            {"kind": "marker_buffer", "hook": "model.http", "observed_unix_ns": 25},
+            {"kind": "candidate_entry", "hook": "ReadFile", "observed_unix_ns": 40}]
+    assert current.summarize_candidate_entries(rows) == {
+        "model.http": {"count": 2, "first_observed_unix_ns": 10,
+                       "last_observed_unix_ns": 30},
+        "model.wss": {"count": 1, "first_observed_unix_ns": 20,
+                      "last_observed_unix_ns": 20},
+    }
 
 
 def test_live_frida_source_omits_file_io_hooks():

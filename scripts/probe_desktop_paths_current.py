@@ -47,7 +47,8 @@ BACKEND_SIGNER_THUMBPRINT = "0467ED57E4A70CE35EB7284092F1FD5285225056"
 _CACHE_DIR = re.compile(r"[a-f0-9]{16,64}\Z")
 _SID = re.compile(r"S-1-5-21-(?:\d+-){3}\d+\Z")
 _OBSERVED_KINDS = frozenset(("probe_ready", "hook_installed", "hook_unavailable",
-                             "entry_mismatch", "marker_buffer"))
+                             "entry_mismatch", "candidate_entry", "marker_buffer",
+                             "read_hypothesis_failed"))
 _MODEL_HOOKS = frozenset(("model.http", "model.wss"))
 
 
@@ -140,7 +141,7 @@ def verify_current_targets(adapter: dict, package: dict[str, str],
 
 
 def _safe_model_event(payload: object) -> dict | None:
-    """Discard unrelated activity, including all unmarked candidate entries."""
+    """Retain only model-hook counters or synthetic marker matches."""
     event = safe_event(payload, "backend")
     if event is None or event["kind"] not in _OBSERVED_KINDS:
         return None
@@ -148,7 +149,26 @@ def _safe_model_event(payload: object) -> dict | None:
         return event
     if event.get("hook") not in _MODEL_HOOKS:
         return None
+    if event["kind"] in {"candidate_entry", "read_hypothesis_failed"}:
+        # These can belong to another task. Keep only hook, event type and
+        # receive time; do not persist caller, thread, arguments or data.
+        result = {key: event[key] for key in ("kind", "role", "hook", "observed_unix_ns")}
+        if event["kind"] == "read_hypothesis_failed" and "stage" in event:
+            result["stage"] = event["stage"]
+        return result
     return event
+
+
+def summarize_candidate_entries(rows: list[dict]) -> dict[str, dict]:
+    """Summarize bounded candidate calls without attributing them to a task."""
+    summary = {}
+    for hook in sorted(_MODEL_HOOKS):
+        times = [row["observed_unix_ns"] for row in rows
+                 if row.get("kind") == "candidate_entry" and row.get("hook") == hook
+                 and type(row.get("observed_unix_ns")) is int]
+        summary[hook] = {"count": len(times), "first_observed_unix_ns": min(times) if times else None,
+                         "last_observed_unix_ns": max(times) if times else None}
+    return summary
 
 
 def _frida_worker(adapter: dict, package: dict[str, str],
@@ -289,11 +309,16 @@ def run_trace(args) -> dict:
             "agent_source_sha256": hashlib.sha256(source.encode()).hexdigest(),
             "events_sha256": hashlib.sha256(event_bytes).hexdigest(),
             "event_count": len(rows),
+            "candidate_entries_by_hook": summarize_candidate_entries(rows),
+            "read_hypothesis_failed_by_hook": {
+                hook: sum(row.get("kind") == "read_hypothesis_failed"
+                          and row.get("hook") == hook for row in rows)
+                for hook in sorted(_MODEL_HOOKS)},
             "model_marker_hits": sum(row.get("kind") == "marker_buffer"
                                      and row.get("hook") in _MODEL_HOOKS for row in rows),
             "errors": sorted(set(errors)),
             "elapsed_ms": (time.time_ns() - began) / 1_000_000,
-            "interpretation": "current-client metadata only; no complete request, denial, or zero-byte proof",
+            "interpretation": "candidate calls may be unrelated background traffic; without a marker hit they do not establish request correlation, completeness, denial, or zero-byte proof",
         }
         (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         return report
@@ -322,7 +347,8 @@ def main() -> None:
         return
     report = run_trace(args)
     print(json.dumps({key: report[key] for key in
-                      ("coverage_status", "model_marker_hits", "errors")}, indent=2))
+                      ("coverage_status", "candidate_entries_by_hook",
+                       "read_hypothesis_failed_by_hook", "model_marker_hits", "errors")}, indent=2))
     if report["errors"]:
         raise SystemExit(2)
 
