@@ -1,0 +1,29 @@
+{
+  "models": [
+    {
+      "slug": "deepseek-v4-pro",
+      "display_name": "DeepSeek-V4-Pro",
+      "description": "DeepSeek Responses API model for the isolated desktop demo.",
+      "base_instructions": "You are a coding assistant. Follow the user's request and use available local tools when needed.",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Low"},
+        {"effort": "high", "description": "High"}
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "availability_nux": null,
+      "upgrade": null,
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "apply_patch_tool_type": "freeform",
+      "truncation_policy": {"mode": "tokens", "limit": 10000},
+      "experimental_supported_tools": [],
+      "input_modalities": ["text"],
+      "context_window": 1048576,
+      "max_context_window": 1048576
+    }
+  ]
+}

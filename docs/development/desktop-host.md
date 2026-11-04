@@ -55,8 +55,29 @@
    & .\scripts\install_desktop_host.ps1 -MsixPath $package -ExpectedSid $demoSid -ProtectedSid $zbnSid -Install
    ```
 
-3. **此单用户离线注册尚未在本机实测。** OpenAI 对离线 MSIX 给出的正式部署流程需要管理员，并使用面向系统的新用户预配命令。若专用账户的 `Add-AppxPackage` 因许可证或权限失败，应停止，不要在当前账户重试、不要自动改用 `Add-AppxProvisionedPackage -Online`。后者会为新用户预配该应用，不满足本 Demo 只针对专用账户的要求。[OpenAI 离线部署](https://learn.chatgpt.com/docs/enterprise/windows-deployment)、[预配作用范围](https://learn.microsoft.com/en-us/powershell/module/dism/add-appxprovisionedpackage?view=windowsserver2025-ps)。此时需由管理员选择能明确限定目标用户的部署工具或调整实验环境。
+3. 2026-11-04 已在 `ttrace-desktop-demo` 标准账户完成单用户离线注册：预检返回 `ReadyToInstall`，执行 `-Install` 后返回 `VerifiedInstalled`，包版本为 `26.1029.7803.0`，桌面主程序及后端文件哈希均通过固定值校验。安装前遇到的脚本执行策略限制，使用仅对当前 PowerShell 进程生效的 `RemoteSigned` 解决。此结果证明安装成功；仍需启动桌面端并验证实际模型发送路径。若其他主机的 `Add-AppxPackage` 因许可证或权限失败，应停止，不要在当前账户重试、不要自动改用 `Add-AppxProvisionedPackage -Online`。后者会为新用户预配该应用，不满足本 Demo 只针对专用账户的要求。[OpenAI 离线部署](https://learn.chatgpt.com/docs/enterprise/windows-deployment)、[预配作用范围](https://learn.microsoft.com/en-us/powershell/module/dism/add-appxprovisionedpackage?view=windowsserver2025-ps)。
 
-4. 安装脚本会在注册后立即核对 `Get-AppxPackage -Name OpenAI.Codex` 的版本，以及 `app/ChatGPT.exe`、`app/resources/codex.exe` 的哈希；随后回到 `zbn` 核对其注册版本及文件哈希仍符合本轮记录。分别记录进程用户 SID、可执行文件路径及后端哈希。固定版本会受应用内更新、Microsoft Store 或设备管理更新影响，运行期间必须持续核对实际文件哈希；关闭应用内更新需要受管策略，单纯保存 MSIX 不会自动固定已安装应用。[OpenAI 更新管理](https://learn.chatgpt.com/docs/enterprise/manage-app-updates)。
+4. 安装脚本会在注册后立即核对 `Get-AppxPackage -Name OpenAI.Codex` 的版本，以及 `app/ChatGPT.exe`、`app/resources/codex.exe` 的哈希。2026-11-04 已从 `zbn` 回查其注册版本仍为 `26.1029.7803.0`，桌面主程序及后端哈希仍与归档相同。后续分别记录进程用户 SID、可执行文件路径及后端哈希。固定版本会受应用内更新、Microsoft Store 或设备管理更新影响，运行期间必须持续核对实际文件哈希；关闭应用内更新需要受管策略，单纯保存 MSIX 不会自动固定已安装应用。[OpenAI 更新管理](https://learn.chatgpt.com/docs/enterprise/manage-app-updates)。
 
-本机已创建 `ttrace-desktop-demo`（SID 末尾 `1005`），但尚未完成专用账户登录，也未在该账户注册或动态验证桌面端。当前分支中的 HTTP/WSS 地址仍是静态候选，附件原始字节 Hook 尚未实现；不得因此开放网络许可或宣称已拦截真实桌面请求。主机上的 WFP 规则如需继续验证，必须由管理员按**专用账户 SID** 单独安装并回读，先证明不会改变 `zbn` 的网络行为。
+本机已创建并登录 `ttrace-desktop-demo`（SID 末尾 `1005`），固定版桌面端已注册并通过安装校验，尚未在该账户动态验证模型发送路径。当前分支中的 HTTP/WSS 地址仍是静态候选，附件原始字节 Hook 尚未实现；不得因此开放网络许可或宣称已拦截真实桌面请求。主机上的 WFP 规则如需继续验证，必须由管理员按**专用账户 SID** 单独安装并回读，先证明不会改变 `zbn` 的网络行为。
+
+## 专用账户的 DeepSeek 模型配置
+
+本 Demo 的测试模型为 DeepSeek `deepseek-v4-pro`，模型提供者地址为 `https://api.deepseek.com`，使用 Responses API。DeepSeek 官方说明该模型和桌面 Codex 的接入方式；Codex 的模型提供者配置属于 Windows 用户级配置，需要重启应用。此处只在 `ttrace-desktop-demo` 下配置，不改 `zbn` 的模型提供者。[DeepSeek Codex 接入](https://api-docs.deepseek.com/quick_start/agent_integrations/codex/)、[Codex Windows 提供者配置](https://learn.chatgpt.com/docs/enterprise/connect-to-a-gateway)。
+
+在该账户的**普通 PowerShell** 中，确认 `whoami /user` 的 SID 末尾是 `1005` 后运行：
+
+```powershell
+$demoBase = 'D:\code\transpect-trace'
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+& "$demoBase\scripts\set_desktop_deepseek_secret.ps1"
+& "$demoBase\scripts\configure_desktop_deepseek.ps1"
+```
+
+第一项命令在本机隐藏输入 API Key，并以当前 Windows 用户的 DPAPI 加密保存；配置文件只引用受保护的凭据读取程序，不保存明文密钥。第二项默认只预检，核对账户 SID、固定版安装文件哈希、模型目录与已有配置。若返回 `ReadyToConfigure`，再执行：
+
+```powershell
+& "$demoBase\scripts\configure_desktop_deepseek.ps1" -Install
+```
+
+成功状态为 `VerifiedConfigured`。若已有不同的 `config.toml`，脚本会拒绝覆盖，须先检查。归档后端已在临时 `CODEX_HOME` 下用本地不转发接收器验证：安全的模型目录可加载，合成 Prompt 进入 `/responses` 请求，命令式认证可提供 Bearer 头。这不等于专用账户桌面端已成功连接 DeepSeek；接下来还需在桌面窗口核对模型、实际发送路径及阻断动作。不要把 API Key 发到聊天或写入仓库。
