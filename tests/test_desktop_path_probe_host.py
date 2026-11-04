@@ -29,7 +29,8 @@ def adapter() -> dict:
             "package_full_name": PINNED,
             "package_version": "26.1029.7803.0",
             "package_publisher": "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B",
-            "desktop_image_sha256": "c" * 64, "binary_sha256": "a" * 64}
+            "desktop_image_sha256": "c" * 64, "binary_sha256": "a" * 64,
+            "backend_version": "codex-cli 0.166.0-alpha.6"}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Appx host probe")
@@ -88,6 +89,46 @@ def test_host_targets_pin_owner_parent_role_hash_and_installed_path(monkeypatch)
     images[100]["image_path"] = rf"C:\other\{PINNED}\app\ChatGPT.exe"
     with pytest.raises(ValueError, match="pinned desktop"):
         host.verify_host_targets(adapter(), package, 100, 200, 300, DEDICATED, PROTECTED)
+
+
+def test_host_targets_accept_only_dedicated_profile_backend_copy(monkeypatch):
+    monkeypatch.setattr(host, "require_dedicated_user", lambda *_: None)
+    monkeypatch.setattr(host, "_profile_directory", lambda sid: r"C:\Users\demo")
+    package_root = rf"C:\Program Files\WindowsApps\{PINNED}"
+    copied = r"C:\Users\demo\AppData\Local\OpenAI\Codex\bin\a159911ff70742e9\codex.exe"
+    images = {
+        100: {"creation_filetime": 10, "image_sha256": "c" * 64,
+              "image_path": package_root + r"\app\ChatGPT.exe"},
+        200: {"creation_filetime": 20, "image_sha256": "a" * 64,
+              "image_path": copied},
+    }
+    rows = {100: {"UserSid": DEDICATED},
+            200: {"UserSid": DEDICATED, "ParentProcessId": 100,
+                  "CommandLine": '"' + copied + '" app-server'}}
+    monkeypatch.setattr(host, "process_identity", lambda pid: images[pid])
+    monkeypatch.setattr(host, "_cim_process", lambda pid: rows[pid])
+    assert host.verify_host_targets(adapter(), {"Location": package_root}, 100, 200,
+                                    None, DEDICATED, PROTECTED)["backend"]["image_path"] == copied
+    images[200]["image_path"] = copied.replace(r"\Users\demo\AppData",
+                                              r"\Users\zbn\AppData")
+    with pytest.raises(ValueError, match="pinned desktop app-server"):
+        host.verify_host_targets(adapter(), {"Location": package_root}, 100, 200,
+                                 None, DEDICATED, PROTECTED)
+    images[200]["image_path"] = copied.replace("a159911ff70742e9", "other")
+    with pytest.raises(ValueError, match="pinned desktop app-server"):
+        host.verify_host_targets(adapter(), {"Location": package_root}, 100, 200,
+                                 None, DEDICATED, PROTECTED)
+
+
+def test_copied_backend_requires_fixed_signer_and_version(monkeypatch):
+    results = iter([
+        SimpleNamespace(returncode=0, stdout=json.dumps({
+            "Status": "Valid", "Thumbprint": host._BACKEND_SIGNER_SHA1})),
+        SimpleNamespace(returncode=0, stdout="codex-cli 0.166.0-alpha.6\n"),
+    ])
+    monkeypatch.setattr(host.subprocess, "run", lambda *a, **kw: next(results))
+    assert host.verify_backend_build(r"C:\Users\demo\codex.exe", adapter())["version"] \
+        == "codex-cli 0.166.0-alpha.6"
 
 
 def test_host_trace_refuses_enforcement_mode_before_any_attach():

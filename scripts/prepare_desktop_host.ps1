@@ -2,15 +2,21 @@
 # It deliberately contains no account, package, firewall, or process mutation.
 [CmdletBinding()]
 param(
-    [string]$MsixPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'runs/desktop-vm/guest-media/ChatGPT-x64.msix'),
-    [string]$PinsPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy/guard/desktop-vm-pins.json')
+    [string]$MsixPath,
+    [string]$PinsPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if (-not $MsixPath) {
+    $MsixPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'runs/desktop-vm/guest-media/ChatGPT-x64.msix'
+}
+if (-not $PinsPath) {
+    $PinsPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy/guard/desktop-vm-pins.json'
+}
 
 $expectedArchiveVersion = '26.1029.7803.0'
-$expectedActiveVersion = '26.1027.6604.0'
+$initialActiveVersion = '26.1027.6604.0'
 $expectedName = 'OpenAI.Codex'
 $expectedPublisher = 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B'
 $expectedFamily = 'OpenAI.Codex_2p2nqsd0c76g0'
@@ -75,7 +81,19 @@ $active = $installed[0]
 Assert-Equal ([string]$active.Name) $expectedName 'Active package name'
 Assert-Equal ([string]$active.Publisher) $expectedPublisher 'Active package publisher'
 Assert-Equal ([string]$active.PackageFamilyName) $expectedFamily 'Active package family'
-Assert-Equal ([string]$active.Version) $expectedActiveVersion 'Active package version'
+if ([string]$active.Version -notin @($initialActiveVersion, $expectedArchiveVersion)) {
+    throw "Unexpected active package version $($active.Version); review the current installation before testing"
+}
+$activeMatchesArchive = $false
+if ([string]$active.Version -ceq $expectedArchiveVersion) {
+    Assert-Equal ([string]$active.PackageFullName) `
+        'OpenAI.Codex_26.1029.7803.0_x64__2p2nqsd0c76g0' 'Active package identity'
+    Assert-Equal (Get-FileHash -LiteralPath (Join-Path $active.InstallLocation 'app/ChatGPT.exe') -Algorithm SHA256).Hash.ToUpperInvariant() `
+        '74DCBC67421C5D5406EA5E4CC80D9C8D8A05D0DF62F1D7BE5690F090F182E71F' 'Active desktop SHA-256'
+    Assert-Equal (Get-FileHash -LiteralPath (Join-Path $active.InstallLocation 'app/resources/codex.exe') -Algorithm SHA256).Hash.ToUpperInvariant() `
+        '925C7D0665FFA49B0DCF748E034A805A04DA984164AC92301432073B47789B99' 'Active backend SHA-256'
+    $activeMatchesArchive = $true
+}
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -96,10 +114,12 @@ $activeProcesses = @(Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" 
     CurrentUserSid = $identity.User.Value
     CurrentUserIsAdministrator = $isAdministrator
     ActivePackageVersion = [string]$active.Version
+    ActiveVersionChangedSinceInitialPreflight = ([string]$active.Version -cne $initialActiveVersion)
+    ActivePackageHashesMatchArchive = $activeMatchesArchive
     ActivePackageFamily = [string]$active.PackageFamilyName
     ActiveDesktopProcessCount = $activeProcesses.Count
     SamePackageFamily = $true
     SafeToInstallInCurrentUser = $false
-    RequiredPath = 'Create a separate standard Windows account; run per-user package registration only in that account after admin review.'
+    RequiredPath = 'Use only the verified separate standard account for any per-user package registration.'
     MutationsPerformed = $false
 }

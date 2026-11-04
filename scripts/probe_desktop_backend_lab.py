@@ -17,6 +17,7 @@ import multiprocessing
 import os
 from pathlib import Path
 from queue import Empty, Queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,7 @@ ADAPTER = ROOT / "deploy/guard/desktop-candidate-26.1029.7803.0.json"
 EXPECTED_BACKEND_SHA256 = "925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99"
 EXPECTED_BACKEND_VERSION = "codex-cli 0.166.0-alpha.6"
 MAX_BODY = 16 * 1024 * 1024
+_SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 
 
 def file_hash(path: Path) -> str:
@@ -263,6 +265,52 @@ def _stop_frida(observer, receiver, collector, errors: list[str]) -> None:
     collector.join(timeout=2)
 
 
+def compare_http_candidate_body(events: list[dict], sink: dict) -> dict:
+    """Compare synthetic HTTP hook metadata with the one received wire body.
+
+    This is equality evidence for this local fixture, not an ABI or coverage
+    claim. A second origin request makes the aggregate sink size ambiguous.
+    """
+    bodies = []
+    incomplete = 0
+    for event in events:
+        if (event.get("kind") != "marker_buffer"
+                or event.get("hook") != "model.http"
+                or event.get("stage") != "hypothesized-http-body"):
+            continue
+        size, digest = event.get("bytes"), event.get("sha256")
+        if type(size) is int and 0 <= size <= MAX_BODY and isinstance(digest, str) \
+                and _SHA256.fullmatch(digest):
+            bodies.append({"bytes": size, "sha256": digest})
+        else:
+            incomplete += 1
+    origin_hashes = sink.get("body_sha256", [])
+    origin_count = sink.get("requests")
+    origin_bytes = sink.get("body_bytes")
+    comparable = (type(origin_count) is int and origin_count == 1
+                  and isinstance(origin_hashes, list)
+                  and len(origin_hashes) == 1 and isinstance(origin_hashes[0], str)
+                  and _SHA256.fullmatch(origin_hashes[0]) is not None
+                  and type(origin_bytes) is int and 0 <= origin_bytes <= MAX_BODY
+                  and sink.get("marker_in_body") is True
+                  and sink.get("paths") == ["responses"])
+    if not comparable:
+        status, exact = "origin_not_comparable", 0
+    elif incomplete:
+        status, exact = "candidate_metadata_incomplete", 0
+    elif not bodies:
+        status, exact = "candidate_body_not_observed", 0
+    else:
+        exact = sum(body["bytes"] == origin_bytes and body["sha256"] == origin_hashes[0]
+                    for body in bodies)
+        status = ("exact_byte_match" if exact == len(bodies) else
+                  "mixed_match_and_mismatch" if exact else "candidate_body_mismatch")
+    return {"status": status, "candidate_body_count": len(bodies),
+            "incomplete_candidate_metadata_count": incomplete,
+            "candidate_bodies": bodies, "exact_match_count": exact,
+            "comparison_scope": "one synthetic archived app-server HTTP request only"}
+
+
 def probe(backend: Path, adapter_path: Path, *, with_frida: bool = False) -> dict:
     backend = backend.resolve(strict=True)
     actual_hash = file_hash(backend)
@@ -368,6 +416,7 @@ def probe(backend: Path, adapter_path: Path, *, with_frida: bool = False) -> dic
     if Path(directory).exists():
         errors.append("temp_cleanup_incomplete")
     kinds = [event["kind"] for event in events]
+    http_body_comparison = compare_http_candidate_body(events, received)
     candidates = {hook: sum(event["kind"] == "candidate_entry" and event.get("hook") == hook
                             for event in events) for hook in ("model.http", "model.wss")}
     markers = {hook: sum(event["kind"] == "marker_buffer" and event.get("hook") == hook
@@ -382,6 +431,7 @@ def probe(backend: Path, adapter_path: Path, *, with_frida: bool = False) -> dic
             "adapter_sha256": file_hash(adapter_path),
             "marker_sha256": hashlib.sha256(marker.encode("ascii")).hexdigest(),
             "handshake": handshake, "sink": received,
+            "http_candidate_body_comparison": http_body_comparison,
             "frida_enabled": with_frida,
             "candidate_entries": sum(kind == "candidate_entry" for kind in kinds),
             "candidate_entries_by_hook": candidates,
@@ -407,6 +457,7 @@ def main() -> int:
     print(json.dumps({"report": str(args.report), "handshake": report["handshake"],
                       "sink": report["sink"], "candidate_entries": report["candidate_entries"],
                       "marker_buffer_hits": report["marker_buffer_hits"],
+                      "http_candidate_body_status": report["http_candidate_body_comparison"]["status"],
                       "errors": report["errors"]}, ensure_ascii=False))
     return 0 if report["handshake"] == ["initialized", "thread/start", "turn/start"] \
         and report["sink"]["marker_in_body"] and not report["errors"] else 1

@@ -127,7 +127,7 @@ if (CONFIG.role === 'backend') {
   installCandidate('model.http', CONFIG.http);
   installCandidate('model.wss', CONFIG.wss);
 }
-Process.attachModuleObserver({onAdded(module) {
+if (CONFIG.observe_io) Process.attachModuleObserver({onAdded(module) {
   const name = module.name.toLowerCase();
   if (name === 'kernel32.dll' || name === 'kernelbase.dll') {
     installExport(module, 'CreateFileW', {onEnter(args) {
@@ -300,9 +300,11 @@ def verify_static_entries(adapter: dict, backend_image: Path) -> dict:
     return discovery
 
 
-def agent_source(role: str, adapter: dict, marker: str, attachment: Path) -> str:
+def agent_source(role: str, adapter: dict, marker: str, attachment: Path,
+                 *, observe_io: bool = True) -> str:
     hooks = {item["layer"]: item for item in adapter["hooks"]}
     config = {"role": role, "marker": list(marker.encode("ascii")),
+              "observe_io": observe_io,
               "max_buffer": 16 * 1024 * 1024,
               "fixture_path": str(attachment.resolve()),
               "http": {"rva": hooks["http_encoded_body_preparation"]["rva"],

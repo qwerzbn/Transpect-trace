@@ -42,6 +42,10 @@ from transpect_trace.observe.windows import identity as process_identity
 
 HOST_TRACE_SCHEMA = "transpect.desktop-path-host-observation/1.0"
 _LOCAL_SID = re.compile(r"S-1-5-21-(?:\d+-){2}\d+-\d+\Z")
+_COPIED_BACKEND = re.compile(r"[a-f0-9]{16}\\codex\.exe\Z", re.IGNORECASE)
+# The fixed codex.exe is independently signed; this is its signer, not the
+# MSIX package signer. A new backend build needs a new reviewed pin.
+_BACKEND_SIGNER_SHA1 = "0467ED57E4A70CE35EB7284092F1FD5285225056"
 
 
 def require_dedicated_user(expected_sid: str, protected_sid: str) -> None:
@@ -108,6 +112,69 @@ def _same_path(left: str, right: str) -> bool:
     return ntpath.normcase(ntpath.normpath(left)) == ntpath.normcase(ntpath.normpath(right))
 
 
+def _profile_directory(expected_sid: str) -> str:
+    """Get the account's OS profile path, not a caller-controlled env value."""
+    if not _LOCAL_SID.fullmatch(expected_sid):
+        raise ValueError("invalid dedicated user SID")
+    command = (
+        f'$p=Get-CimInstance Win32_UserProfile -Filter "SID=\'{expected_sid}\'"; '
+        'if ($null -eq $p -or [string]::IsNullOrWhiteSpace($p.LocalPath)) { exit 2 }; '
+        '$p.LocalPath'
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15, check=False,
+        env=windows_powershell_env(),
+    )
+    value = result.stdout.strip()
+    if result.returncode or not value or not ntpath.isabs(value):
+        raise ValueError("dedicated Windows user profile is unavailable")
+    return ntpath.normpath(value)
+
+
+def _is_app_managed_backend(path: str, expected_sid: str) -> bool:
+    """Accept only the desktop's versioned copy in this user's profile."""
+    root = ntpath.join(_profile_directory(expected_sid), "AppData", "Local",
+                       "OpenAI", "Codex", "bin")
+    try:
+        relative = ntpath.relpath(ntpath.normpath(path), root)
+    except ValueError:
+        return False
+    return _COPIED_BACKEND.fullmatch(relative) is not None
+
+
+def verify_backend_build(path: str, adapter: dict) -> dict[str, str]:
+    """Check the signed copied executable and its reported fixed version."""
+    escaped = path.replace("'", "''")
+    command = (
+        f"$s=Get-AuthenticodeSignature -LiteralPath '{escaped}'; "
+        'if ($null -eq $s.SignerCertificate) { exit 2 }; '
+        '[pscustomobject]@{Status=$s.Status.ToString();'
+        'Thumbprint=$s.SignerCertificate.Thumbprint}|ConvertTo-Json -Compress'
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15, check=False,
+        env=windows_powershell_env(),
+    )
+    if result.returncode or not result.stdout.strip():
+        raise ValueError("desktop backend signature unavailable")
+    signature = json.loads(result.stdout)
+    if (not isinstance(signature, dict) or signature.get("Status") != "Valid"
+            or signature.get("Thumbprint", "").upper() != _BACKEND_SIGNER_SHA1):
+        raise ValueError("desktop backend signer differs from fixed build")
+    version = subprocess.run(
+        [path, "--version"], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=10, check=False,
+    )
+    if version.returncode or version.stdout.strip() != adapter["backend_version"]:
+        raise ValueError("desktop backend version differs from fixed build")
+    return {"signer_sha1": _BACKEND_SIGNER_SHA1, "version": version.stdout.strip()}
+
+
 def verify_host_targets(adapter: dict, package: dict[str, str], desktop_pid: int,
                         backend_pid: int, network_pid: int | None,
                         expected_sid: str, protected_sid: str) -> dict[str, dict]:
@@ -130,7 +197,8 @@ def verify_host_targets(adapter: dict, package: dict[str, str], desktop_pid: int
             or desktop["image_sha256"] != adapter["desktop_image_sha256"]
             or deskrow.get("UserSid") != expected_sid):
         raise ValueError("host target is not the dedicated pinned desktop")
-    if (not _same_path(backend["image_path"], expected_backend)
+    if (not (_same_path(backend["image_path"], expected_backend)
+             or _is_app_managed_backend(backend["image_path"], expected_sid))
             or backend["image_sha256"] != adapter["binary_sha256"]
             or backrow.get("ParentProcessId") != desktop_pid
             or backrow.get("UserSid") != expected_sid
@@ -139,7 +207,8 @@ def verify_host_targets(adapter: dict, package: dict[str, str], desktop_pid: int
     targets = {"desktop": {"pid": desktop_pid, "birth": desktop["creation_filetime"],
                             "image_sha256": desktop["image_sha256"]},
                "backend": {"pid": backend_pid, "birth": backend["creation_filetime"],
-                            "image_sha256": backend["image_sha256"]}}
+                            "image_sha256": backend["image_sha256"],
+                            "image_path": backend["image_path"]}}
     if network_pid is not None:
         network, row = process_identity(network_pid), _cim_process(network_pid)
         if (not _same_path(network["image_path"], expected_desktop)
@@ -201,6 +270,7 @@ def _frida_worker(adapter: dict, package: dict[str, str], targets: dict[str, dic
     send_lock = threading.Lock()
     try:
         require_dedicated_user(expected_sid, protected_sid)
+        verify_backend_build(targets["backend"]["image_path"], adapter)
         import frida  # Research-only dependency; never an enforcement gate.
         with send_lock:
             sender.send({"frida_version": getattr(frida, "__version__", "unknown")})
@@ -334,6 +404,7 @@ def run_trace(args) -> dict:
     package = registered_package(adapter)
     targets = verify_host_targets(adapter, package, args.desktop_pid, args.backend_pid,
                                   args.network_pid, args.expected_sid, args.protected_sid)
+    backend_build = verify_backend_build(targets["backend"]["image_path"], adapter)
     static = verify_static_entries(adapter, Path(package["Location"]) / "app" / "resources" / "codex.exe")
     marker = (fixture["prompt_marker"] if args.case == "text" else
               fixture["upload_marker"] if args.case == "upload" else "")
@@ -399,6 +470,7 @@ def run_trace(args) -> dict:
                   "dedicated_user_sid_sha256": hashlib.sha256(args.expected_sid.encode()).hexdigest(),
                   "protected_user_sid_sha256": hashlib.sha256(args.protected_sid.encode()).hexdigest(),
                   "target_images": targets,
+                  "backend_build": backend_build,
                   "static_candidate_hash": hashlib.sha256(
                       json.dumps(static["candidates"], sort_keys=True).encode()).hexdigest(),
                   "network_service_traced": "network" in targets,

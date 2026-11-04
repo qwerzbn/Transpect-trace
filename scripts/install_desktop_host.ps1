@@ -6,12 +6,15 @@ param(
     [Parameter(Mandatory = $true)][string]$ExpectedSid,
     [Parameter(Mandatory = $true)][string]$ProtectedSid,
     [string]$ExpectedAccountName = 'ttrace-desktop-demo',
-    [string]$PinsPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy/guard/desktop-vm-pins.json'),
+    [string]$PinsPath,
     [switch]$Install
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if (-not $PinsPath) {
+    $PinsPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy/guard/desktop-vm-pins.json'
+}
 
 $packageName = 'OpenAI.Codex'
 $packageVersion = '26.1029.7803.0'
