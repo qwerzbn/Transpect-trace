@@ -74,7 +74,15 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
 & "$demoBase\scripts\configure_desktop_deepseek.ps1"
 ```
 
-第一项命令在本机隐藏输入 API Key，并以当前 Windows 用户的 DPAPI 加密保存；配置文件只引用受保护的凭据读取程序，不保存明文密钥。第二项默认只预检，核对账户 SID、固定版安装文件哈希、模型目录与已有配置。若返回 `ReadyToConfigure`，再执行：
+第一项命令在本机隐藏输入 API Key，并以当前 Windows 用户的 DPAPI 加密保存；配置文件只引用受保护的凭据读取程序，不保存明文密钥。第二项默认只预检，核对账户 SID、固定版安装文件哈希、模型目录与已有配置。
+
+若首次保存密钥时在文件移动后出现 `SeSecurityPrivilege`，使用已修复脚本的只读校验模式检查现有文件，无需再次输入密钥：
+
+```powershell
+& "$demoBase\scripts\set_desktop_deepseek_secret.ps1" -VerifyOnly
+```
+
+仅在返回 `SecretVerified` 后继续配置；校验失败时停止并检查报错。配置脚本也会自动执行相同的校验。若配置预检返回 `ReadyToConfigure`，再执行：
 
 ```powershell
 & "$demoBase\scripts\configure_desktop_deepseek.ps1" -Install

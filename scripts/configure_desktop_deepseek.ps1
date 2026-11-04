@@ -99,6 +99,11 @@ if (-not (Test-Path -LiteralPath $protectedHelper -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $secretPath -PathType Leaf)) {
     throw 'Protected DeepSeek secret is missing'
 }
+$secretSetup = Join-Path $PSScriptRoot 'set_desktop_deepseek_secret.ps1'
+$secretVerification = & $secretSetup -VerifyOnly
+if ($secretVerification.Status -cne 'SecretVerified') {
+    throw 'Protected DeepSeek secret verification failed'
+}
 Assert-Equal (Get-FileHash -LiteralPath $protectedHelper -Algorithm SHA256).Hash.ToUpperInvariant() `
     (Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash.ToUpperInvariant() 'Protected credential helper SHA-256'
 $catalogBytes = [IO.File]::ReadAllBytes($catalogSource)
