@@ -1,6 +1,16 @@
 # Transpect Trace
 
-面向 Windows 官方 Codex CLI 的数据安全项目，提供用户请求内容检测、系统行为追踪、LLM 请求阻断和网络出口控制。
+当前开发分支 `codex/desktop-dlp-demo` 以**本机现用 Codex 桌面客户端**为主线；下文另保留既有 Codex CLI 能力和运行说明。
+
+## 当前主线：本机 Codex 桌面端 DLP Demo
+
+目标处理顺序是：**读取完整模型请求字节 → AES-GCM 加密落盘并回读核对 → 本地四层 DLP 扫描 → `ALLOW` 继续发送，`REVIEW`／`BLOCK` 返回错误**。入口见[本机桌面端开发主线](docs/development/desktop-current-mainline.md)，实测证据见[当前客户端记录](docs/development/desktop-path-current.md)。方案不修改 Codex 源码，也不使用转发代理。
+
+目前只有指定 Local 测试聊天的合成 HTTP 请求完成了采集、归档、敏感识别与候选发送点拒绝的联调。短时 Frida 研究探针结束后**不会常驻保护**正常聊天；桌面输入框提交、WSS 全路径、真实附件上传及 Agent 工具直连仍须分别验收。当前工具外发实测为可达，不能视为已阻断。内容识别数据集结果见[本地评测](docs/development/desktop-dlp-evaluation.md)。
+
+## 既有 Codex CLI 能力
+
+项目原有的 Windows 官方 Codex CLI 路线提供用户请求内容检测、系统行为追踪、LLM 请求阻断和网络出口控制。以下快速开始与 Native Guard 构建命令适用于 CLI，**不会在本机现用桌面端自动启用上述 DLP 主链路**。
 
 ## 原理与架构
 
