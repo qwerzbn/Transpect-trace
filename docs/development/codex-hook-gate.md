@@ -97,6 +97,24 @@ AES-GCM 加密落盘（DPAPI 保护密钥），得到记录 ID
 
 两个用例在同一套配置里只差 prompt 内容。普通用例确实发出了请求并被真实源站以 401 拒绝，这说明被拦用例的"零请求"不是环境坏掉的假象。源站侧的零字节仍**没有**独立证明：请求是否发出是按客户端自身的事件和报错推断的，不是由收件端确认的。
 
+### 6.1 受信任路径实测（真实 `CODEX_HOME`、真实凭据、无 bypass）
+
+上面的探针用的是私有 `CODEX_HOME` 加 `--dangerously-bypass-hook-trust`，只证明了契约正确，没有证明常态部署生效。信任批准落盘后（`config.toml` 的 `hooks.state."<hooks.json 路径>:<event>:0:0".trusted_hash`，三个事件各一条）补了一次**不带任何 bypass 参数**的实测，用默认 `CODEX_HOME`（`~/.codex`，已登录凭据）跑同一个固定后端：
+
+| 用例 | 时间 (UTC) | 门控判定 | 客户端 | 模型是否应答 |
+| --- | --- | --- | --- | --- |
+| 合成假密钥 prompt | `09:09:57` | `BLOCK`，`ASSIGNED_SECRET`+`ENTROPY_TOKEN`，类别 `SECRET`，16 ms | `hook: UserPromptSubmit Blocked` | 无模型轮次，`tokens used` 未出现 |
+| 普通 prompt | `09:10:56` | `ALLOW`，零命中，16 ms | `hook: UserPromptSubmit Completed` | 模型回 `OK`，`tokens used 9,366` |
+
+良性对照拿到了真实应答并计费，所以被拦那条的未送达不是环境失效。两条相隔 59 秒，配置完全相同。
+
+**桌面界面本身也在门控内**，这一条是从归档内容反查确认的：同一审计文件里 `09:08:23` 有一条 `UserPromptSubmit` `ALLOW`，解密后是界面输入框里敲的中文 prompt（88 个汉字，UTF-8 无损，无替换字符），不是任何 `codex exec` 用例发出的。界面输入会被逐条检查并归档。
+
+两处取证弱点，照实记下：
+
+- **界面路径只验证了"检查并放行"，没有观测到界面侧的一次拦截。** 命令行通道的拦截是直接证据，界面通道的拦截目前是按同一事件同一处理器推断的。
+- **"本轮零模型请求"不能从审计切片独立得出。** 实测期间桌面会话同时在跑，共用同一个 `audit.jsonl`，那一分钟里的 `PreModelRequest`／`PreToolUse` 行大部分属于界面会话。本轮无请求的依据是客户端自身输出：block 后会话直接结束，没有模型轮次也没有 token 计费。
+
 ## 7. 没有闭合的缺口
 
 - **界面附件完全没覆盖。** Hook 机制里没有附件事件，`UserPromptSubmit` 的 `prompt` 只有文本。桌面端添加的文件绕过本门控。
