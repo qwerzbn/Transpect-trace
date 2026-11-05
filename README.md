@@ -2,11 +2,27 @@
 
 当前开发分支 `codex/desktop-dlp-demo` 以**本机现用 Codex 桌面客户端**为主线；下文另保留既有 Codex CLI 能力和运行说明。
 
-## 当前主线：本机 Codex 桌面端 DLP Demo
+## 当前主线：本机 Codex 客户端的发送前 DLP 门控
 
-目标处理顺序是：**读取完整模型请求字节 → AES-GCM 加密落盘并回读核对 → 本地四层 DLP 扫描 → `ALLOW` 继续发送，`REVIEW`／`BLOCK` 返回错误**。入口见[本机桌面端开发主线](docs/development/desktop-current-mainline.md)，实测证据见[当前客户端记录](docs/development/desktop-path-current.md)。方案不修改 Codex 源码，也不使用转发代理。
+处理顺序是：**取出该事件真正能上线的内容 → AES-GCM 加密落盘 → 本地四层 DLP 扫描 → `ALLOW` 放行，`REVIEW`／`BLOCK`／任何异常返回拒绝**。不修改 Codex 源码，不使用转发代理。
 
-目前只有指定 Local 测试聊天的合成 HTTP 请求完成了采集、归档、敏感识别与候选发送点拒绝的联调。短时 Frida 研究探针结束后**不会常驻保护**正常聊天；桌面输入框提交、WSS 全路径、真实附件上传及 Agent 工具直连仍须分别验收。当前工具外发实测为可达，不能视为已阻断。内容识别数据集结果见[本地评测](docs/development/desktop-dlp-evaluation.md)。
+**首选路径是客户端自带的命令 Hook 机制**（[记录](docs/development/codex-hook-gate.md)）。它经用户批准信任后常驻生效：`UserPromptSubmit` 拦住**真实输入框提交**的文本，`PreToolUse` 拦住**Agent 工具调用**。两者已在本机实测确认——被拦用例该轮零模型请求、未接触源站；同配置下的普通用例请求正常发出并被源站应答，说明零请求不是环境假象。门控按客户端自己内嵌的 JSON Schema 编写并有[契约测试](tests/test_codex_hook_contract.py)校验，因为客户端会丢弃它解析不了的回复。
+
+启用 enforce 前先量误报：在本机 262 个会话、2,847 条真实 prompt 上回放，拒绝率经两处规则修复从 **37.41% 降到 0.63%**，且固定公开语料上的银行卡检出数完全不变。另在**检测器冻结后才首次读取**的 17,046 行留出语料上评测。详见[本地评测](docs/development/desktop-dlp-evaluation.md)。
+
+仍未闭合，不得写成已覆盖：**界面附件**没有对应 Hook 事件；**Hook 进程启不动时客户端故障放行**，防护依赖门控路径的 ACL；**机器级强制层**在本版不可用（已验证该文件被读取，但 `hooks.windows_managed_dir` 不加载任何 Hook）；**工具进程自建连接**不受内容门控；**纯语义改写**是诚实漏检。
+
+另有一条 Frida 研究探针路线，用于取完整模型请求正文与 WSS 字节，只覆盖指定测试聊天的合成请求，**不常驻**；入口见[桌面端开发主线](docs/development/desktop-current-mainline.md)，逐轮事实见[当前客户端记录](docs/development/desktop-path-current.md)。
+
+```powershell
+# 装到 <CODEX_HOME>/hooks.json，保留无关的既有 Hook；装好后须在 Codex 界面接受一次 Hook 审阅。
+uv run --no-sync python scripts/install_codex_hook_gate.py --layer user --mode enforce
+
+# 先量误报，再决定 enforce 还是 observe。
+uv run --no-sync python scripts/measure_codex_gate_false_positives.py
+
+uv run --no-sync python scripts/install_codex_hook_gate.py --remove
+```
 
 ## 既有 Codex CLI 能力
 

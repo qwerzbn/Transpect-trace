@@ -98,7 +98,7 @@ def test_default_evaluation_is_full_and_marks_policy_truth_unavailable(monkeypat
             ("gretel_en", "two", "Public note two", set(), "Public note two")]
     monkeypatch.setattr(evaluation, "_rows", lambda _paths: rows)
     report = evaluation.evaluate({})
-    assert report["schema"] == "transpect.desktop-dlp.dataset-evaluation/1.1"
+    assert report["schema"] == "transpect.desktop-dlp.dataset-evaluation/1.2"
     assert report["selection_mode"] == "full"
     assert report["datasets"]["gretel_en"]["decisions"]["rows"] == 2
     assert not report["blind_holdout"]
@@ -107,3 +107,22 @@ def test_default_evaluation_is_full_and_marks_policy_truth_unavailable(monkeypat
     assert report["public_corpus_registrations_loaded"] is False
     assert report["synthetic_fixture_registrations_loaded"] is True
     assert "redacted_proxy_decisions" in report["datasets"]["gretel_en"]
+    # The engine decision and the shipped gate action are reported separately:
+    # advisory rules score but do not deny.
+    assert report["datasets"]["gretel_en"]["gate_policy_actions"]["ALLOW"] == 2
+    assert report["datasets"]["gretel_en"]["role"] == "development"
+    assert report["holdout_corpora"] == ["ai4privacy_en_validation"]
+    assert "ai4privacy_en_validation" not in report["development_corpora"]
+
+
+def test_gate_action_drops_advisory_rules_but_keeps_inspection_errors():
+    advisory = evaluation.DLPVerdict(
+        "REVIEW", "AMBIGUOUS_CONTENT", ("ENTROPY_TOKEN",), ("SECRET",),
+        {"SECRET": 0.6}, (("SECRET", "ENTROPY_TOKEN", 0.6),))
+    assert evaluation.gate_action(advisory) == "ALLOW"
+    enforced = evaluation.DLPVerdict(
+        "BLOCK", "MATCHED_SENSITIVE_CONTENT", ("ASSIGNED_SECRET",), ("SECRET",),
+        {"SECRET": 0.85}, (("SECRET", "ASSIGNED_SECRET", 0.85),))
+    assert evaluation.gate_action(enforced) == "BLOCK"
+    failed = evaluation.DLPVerdict("BLOCK", "INSPECTION_FAILED")
+    assert evaluation.gate_action(failed) == "BLOCK"

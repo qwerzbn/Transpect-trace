@@ -13,18 +13,20 @@ import math
 import re
 import time
 import unicodedata
-from collections import Counter, deque
+from collections import Counter
 from dataclasses import dataclass, field
 from io import StringIO
 from typing import Mapping
-
-from .file_extract import MAX_FILE_BYTES, UninspectableFile, extract_text
 
 
 MAX_TEXT_BYTES = 16 * 1024 * 1024
 INSPECTION_SECONDS = 1.25
 BLOCK_THRESHOLD = 0.80
 REVIEW_THRESHOLD = 0.50
+
+_EDM_TOKEN = re.compile(r"[A-Za-z0-9_@.+-]{2,128}|[㐀-鿿]{2,128}")
+_CHINESE_RUN = re.compile(r"[㐀-鿿]+")
+_WORD = re.compile(r"\w+")
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,10 @@ class DLPVerdict:
     rule_ids: tuple[str, ...] = ()
     categories: tuple[str, ...] = ()
     category_scores: Mapping[str, float] = field(default_factory=dict)
+    # Deduplicated (category, rule_id, score) triples, so a caller can apply a
+    # per-category or per-rule action without re-running inspection. Metadata
+    # only: no matched content appears here.
+    evidence: tuple[tuple[str, str, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -47,8 +53,14 @@ def _normalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
-def _digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _digest(value: str) -> bytes:
+    """Stable 128-bit shingle identity; both index and query use this function.
+
+    BLAKE2b is keyless here on purpose: a shingle index must be comparable
+    across restarts. Preimage resistance is what keeps registered document
+    text out of the retained index.
+    """
+    return hashlib.blake2b(value.encode("utf-8"), digest_size=16).digest()
 
 
 @dataclass(frozen=True)
@@ -82,28 +94,26 @@ class EDMIndex:
                     chinese_lengths.add(len(normalized))
         return cls(bytes(key), {digest: tuple(rows) for digest, rows in values.items()}, frozenset(chinese_lengths))
 
-    def matches(self, text: str, deadline: float) -> list[_Finding]:
+    def matches(self, normalized: str, deadline: float) -> list[_Finding]:
+        """Scan text already passed through `_normalize`, so tokens need no rework."""
         if not self._digests:
             return []
         hits: dict[str, set[str]] = {}
         candidates: set[str] = set()
-        token_pattern = re.compile(r"[A-Za-z0-9_@.+-]{2,128}|[\u3400-\u9fff]{2,128}")
         previous = None
-        for number, match in enumerate(token_pattern.finditer(text)):
+        for number, match in enumerate(_EDM_TOKEN.finditer(normalized)):
             if number % 1024 == 0 and time.monotonic() > deadline:
                 raise TimeoutError("EDM deadline")
-            if number > 200_000:
+            if number > 200_000 or len(candidates) > 200_000:
                 raise ValueError("EDM candidate limit")
-            candidates.add(_normalize(match.group()))
-            if previous is not None and match.start() - previous.end() <= 3 and text[previous.end():match.start()].isspace():
-                candidates.add(_normalize(previous.group() + " " + match.group()))
-            if self._chinese_lengths and re.fullmatch(r"[\u3400-\u9fff]+", match.group()):
-                chinese = match.group()
+            token = match.group()
+            candidates.add(token)
+            if previous is not None and match.start() - previous.end() == 1:
+                candidates.add(previous.group() + " " + token)
+            if self._chinese_lengths and _CHINESE_RUN.fullmatch(token):
                 for size in self._chinese_lengths:
-                    for offset in range(len(chinese) - size + 1):
-                        candidates.add(_normalize(chinese[offset:offset + size]))
-                        if len(candidates) > 200_000:
-                            raise ValueError("EDM candidate limit")
+                    for offset in range(len(token) - size + 1):
+                        candidates.add(token[offset:offset + size])
             previous = match
         for number, candidate in enumerate(candidates):
             if number % 1024 == 0 and time.monotonic() > deadline:
@@ -122,13 +132,13 @@ class EDMIndex:
 class FingerprintIndex:
     """Stable SHA-256 four-word shingles; no registered document text is retained."""
 
-    _records: Mapping[str, tuple[str, frozenset[str]]] = field(repr=False)
+    _records: Mapping[str, tuple[str, frozenset[bytes]]] = field(repr=False)
 
     @classmethod
     def from_documents(cls, documents: Mapping[str, tuple[str, str]]) -> "FingerprintIndex":
         if len(documents) > 4096:
             raise ValueError("fingerprint registration limit")
-        records: dict[str, tuple[str, frozenset[str]]] = {}
+        records: dict[str, tuple[str, frozenset[bytes]]] = {}
         for registration_id, (category, raw) in documents.items():
             if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", registration_id):
                 raise ValueError("invalid registration ID")
@@ -136,14 +146,15 @@ class FingerprintIndex:
                 raise ValueError("unsupported fingerprint category")
             if len(raw.encode("utf-8")) > MAX_TEXT_BYTES:
                 raise ValueError("fingerprint registration size")
-            shingles = _shingles(raw)
+            shingles = _shingles(_normalize(raw))
             if len(shingles) < 3:
                 raise ValueError("fingerprint registration too short")
             records[registration_id] = (category, frozenset(shingles))
         return cls(records)
 
-    def matches(self, text: str, deadline: float) -> list[_Finding]:
-        query = _shingles(text, deadline)
+    def matches(self, normalized: str, deadline: float) -> list[_Finding]:
+        """Scan text already passed through `_normalize`."""
+        query = _shingles(normalized, deadline)
         findings = []
         for registration_id, (category, registered) in self._records.items():
             if time.monotonic() > deadline:
@@ -156,18 +167,32 @@ class FingerprintIndex:
         return findings
 
 
-def _shingles(text: str, deadline: float | None = None) -> set[str]:
-    words: deque[str] = deque(maxlen=4)
-    shingles = set()
-    for offset, match in enumerate(re.finditer(r"\w+", _normalize(text))):
-        if offset > 250_000:
-            raise ValueError("fingerprint token limit")
-        if offset % 4096 == 0 and deadline is not None and time.monotonic() > deadline:
+def _shingles(normalized: str, deadline: float | None = None) -> set[bytes]:
+    words = _WORD.findall(normalized)
+    if len(words) > 250_000:
+        raise ValueError("fingerprint token limit")
+    shingles: set[bytes] = set()
+    join = " ".join
+    for start in range(0, max(0, len(words) - 3), 4096):
+        if deadline is not None and time.monotonic() > deadline:
             raise TimeoutError("fingerprint deadline")
-        words.append(match.group())
-        if len(words) == 4:
-            shingles.add(_digest(" ".join(words)))
+        window = words[start:start + 4099]
+        shingles.update(_digest(join(window[offset:offset + 4]))
+                        for offset in range(len(window) - 3))
     return shingles
+
+
+def fuse(evidence: tuple[tuple[str, str, float], ...]) -> dict[str, float]:
+    """Noisy-OR independent evidence per category; a caller may pass a subset."""
+    scores: dict[str, float] = {}
+    for category, _rule_id, score in evidence:
+        scores[category] = 1 - (1 - scores.get(category, 0.0)) * (1 - score)
+    return {category: round(score, 4) for category, score in scores.items()}
+
+
+def decide(highest: float) -> str:
+    return ("BLOCK" if highest >= BLOCK_THRESHOLD
+            else "REVIEW" if highest >= REVIEW_THRESHOLD else "ALLOW")
 
 
 def _entropy(token: str) -> float:
@@ -184,6 +209,46 @@ def _luhn(value: str) -> bool:
                for offset, digit in enumerate(reversed(digits))) % 10 == 0
 
 
+def _card_issuer(value: str) -> bool:
+    """Luhn alone is weak: one random digit run in ten passes it.
+
+    Requiring a real issuer identification number as well is what separates a
+    card from a long version string, epoch stamp or order number. Measured on
+    this machine's own prompt history, Luhn-only matching produced 73 denials
+    with no card among them.
+    """
+    digits = "".join(char for char in value if char.isdigit())
+    if len(digits) not in {13, 14, 15, 16, 17, 18, 19}:
+        return False
+    return (digits[0] == "4"                                    # Visa
+            or digits[:2] in {"34", "37"}                       # American Express
+            or 51 <= int(digits[:2]) <= 55                      # Mastercard
+            or 2221 <= int(digits[:4]) <= 2720                  # Mastercard 2-series
+            or digits[:2] in {"62", "81"}                       # UnionPay
+            or digits[:2] == "35"                               # JCB
+            or digits[:4] == "6011" or digits[:2] in {"64", "65"}   # Discover
+            or 300 <= int(digits[:3]) <= 305 or digits[:2] in {"36", "38", "39"})
+
+
+def _card_grouping(value: str) -> bool:
+    """Reject separator layouts no card is written in.
+
+    `2265123456-7890` passes Luhn and lands in a Mastercard issuer range, yet
+    it is a ten-then-four identifier, not a card. Cards are written contiguous,
+    in four-digit groups, or as Amex 4-6-5.
+    """
+    groups = [len(part) for part in re.split(r"[ -]+", value.strip()) if part]
+    if len(groups) == 1:
+        return True
+    if groups == [4, 6, 5]:
+        return True
+    return all(size == 4 for size in groups[:-1]) and 1 <= groups[-1] <= 6
+
+
+def _payment_card(value: str) -> bool:
+    return _luhn(value) and _card_issuer(value) and _card_grouping(value)
+
+
 def _cn_id_valid(value: str) -> bool:
     if not re.fullmatch(r"\d{17}[\dXx]", value):
         return False
@@ -196,10 +261,13 @@ _BENIGN = re.compile(r"^(?:[*x•]{3,}|\$\{[^}]+\}|<[^>]+>|placeholder|redacted)
 _RULES = (
     ("AWS_ACCESS_KEY", "SECRET", re.compile(r"\bAKIA[0-9A-Z]{16}\b"), 0.95, (), None),
     ("PRIVATE_KEY", "SECRET", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"), 0.98, (), None),
-    ("ASSIGNED_SECRET", "SECRET", re.compile(r"(?i)\b(?:api[_-]?key|secret|access[_-]?token|client_secret|token|password|passwd)\s*[=:]\s*['\"]?([A-Za-z0-9+/._=-]{12,})"), 0.65, ("secret", "token", "password", "key"), None),
+    # The keyword may sit inside a longer identifier: `aws_secret_access_key=`
+    # and `GITHUB_TOKEN=` are the common real spellings, and anchoring the
+    # keyword directly against the delimiter missed both.
+    ("ASSIGNED_SECRET", "SECRET", re.compile(r"(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.-]{0,40}(?:api[_-]?key|secret|access[_-]?token|client[_-]?secret|token|password|passwd|credential)[A-Za-z0-9_.-]{0,40}\s*[=:]\s*['\"]?([A-Za-z0-9+/._=-]{12,})"), 0.65, ("secret", "token", "password", "key"), None),
     ("US_SSN", "PII", re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)"), 0.65, ("ssn", "social security"), None),
     ("CN_ID", "PII", re.compile(r"(?<!\d)\d{17}[\dXx](?![A-Za-z0-9])"), 0.75, ("身份证", "身份", "证件"), _cn_id_valid),
-    ("PAYMENT_CARD", "PII", re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)"), 0.88, ("card", "visa", "信用卡", "银行卡"), _luhn),
+    ("PAYMENT_CARD", "PII", re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)"), 0.88, ("card", "visa", "信用卡", "银行卡"), _payment_card),
     ("CN_PASSPORT", "PII", re.compile(r"(?<![A-Za-z0-9])[EG]\d{8}(?![A-Za-z0-9])"), 0.60,
      ("护照", "证件", "签证", "passport"), None),
     ("CN_PHONE", "PII", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), 0.45, ("phone", "mobile", "电话", "手机"), None),
@@ -238,9 +306,9 @@ def _canonical_forms(text: str, deadline: float) -> list[str]:
     return forms
 
 
-def _rules(text: str, deadline: float) -> list[_Finding]:
+def _rules(forms: list[str], deadline: float) -> list[_Finding]:
     results = []
-    for form_index, form in enumerate(_canonical_forms(text, deadline)):
+    for form_index, form in enumerate(forms):
         for rule_id, category, pattern, base, context, validator in _RULES:
             for number, match in enumerate(pattern.finditer(form)):
                 if number % 1024 == 0 and time.monotonic() > deadline:
@@ -265,26 +333,51 @@ def _rules(text: str, deadline: float) -> list[_Finding]:
     return results
 
 
-def _entropy_layer(text: str, deadline: float) -> list[_Finding]:
+# Credential-specific phrases, not bare words. "key" alone appears constantly in
+# developer prose (primary key, key name, keyboard) and raised the context-entropy
+# rate on this machine's own prompt history from 6 to 59 of 2,847 prompts with no
+# added true positive.
+_ENTROPY_CONTEXT = (
+    "api key", "api_key", "api-key", "apikey", "secret", "access key", "access_key",
+    "secret key", "secret_key", "private key", "private_key", "token", "credential",
+    "bearer", "密钥", "令牌", "口令",
+)
+
+
+def _entropy_layer(forms: list[str], deadline: float) -> list[_Finding]:
+    """Run over the decoded forms too: an encoded secret hides from the rules.
+
+    Base64 or hex wrapping leaves a high-entropy blob whose *decoded* value is
+    the real credential. Scanning only the original text caught the wrapper by
+    luck, never the payload.
+    """
     findings = []
     seen = set()
-    for number, match in enumerate(_ENTROPY_TOKENS.finditer(text)):
-        if number % 1024 == 0 and time.monotonic() > deadline:
-            raise TimeoutError("entropy deadline")
-        token = match.group()
-        if token in seen:
-            continue
-        seen.add(token)
-        if len(seen) > 65_536:
-            raise ValueError("entropy token limit")
-        if re.fullmatch(r"[a-fA-F0-9]{32,128}", token):
-            continue  # Common checksums, handled by rules if context identifies a secret.
-        if not (any(char.isalpha() for char in token) and any(char.isdigit() for char in token)):
-            continue
-        if _entropy(token) >= 3.6:
-            neighborhood = text[max(0, match.start() - 32):match.end() + 32].casefold()
-            context = any(word in neighborhood for word in ("token", "secret", "key", "credential", "密钥", "令牌"))
-            findings.append(_Finding("SECRET", "ENTROPY_TOKEN", 0.83 if context else 0.60))
+    for form_index, form in enumerate(forms):
+        for number, match in enumerate(_ENTROPY_TOKENS.finditer(form)):
+            if number % 1024 == 0 and time.monotonic() > deadline:
+                raise TimeoutError("entropy deadline")
+            token = match.group()
+            if token in seen:
+                continue
+            seen.add(token)
+            if len(seen) > 65_536:
+                raise ValueError("entropy token limit")
+            if re.fullmatch(r"[a-fA-F0-9]{32,128}", token):
+                continue  # Common checksums, handled by rules if context identifies a secret.
+            if not (any(char.isalpha() for char in token) and any(char.isdigit() for char in token)):
+                continue
+            if _entropy(token) >= 3.6:
+                neighborhood = form[max(0, match.start() - 32):match.end() + 32].casefold()
+                context = any(word in neighborhood for word in _ENTROPY_CONTEXT)
+                # Uncorroborated high entropy is reported under its own rule ID.
+                # Commit SHAs, package hashes and opaque identifiers all look
+                # like this, so a deployment decides whether that alone denies.
+                suffix = "_DECODED" if form_index else ""
+                findings.append(
+                    _Finding("SECRET", "ENTROPY_TOKEN_CONTEXT" + suffix, 0.83)
+                    if context else
+                    _Finding("SECRET", "ENTROPY_TOKEN" + suffix, 0.60 + 0.25 * bool(form_index)))
     return findings
 
 
@@ -319,31 +412,43 @@ class ContentDLPEngine:
             return DLPVerdict("BLOCK", "TEXT_UNINSPECTABLE", ("TEXT_UNINSPECTABLE",), ("INSPECTION_ERROR",))
         deadline = time.monotonic() + INSPECTION_SECONDS
         try:
-            findings = _rules(text, deadline)
-            findings.extend(_entropy_layer(text, deadline))
-            if self.edm_index:
-                findings.extend(self.edm_index.matches(text, deadline))
-            if self.index:
-                findings.extend(self.index.matches(text, deadline))
+            # Decode base64/hex once; the rule and entropy layers share it.
+            forms = _canonical_forms(text, deadline)
+            findings = _rules(forms, deadline)
+            findings.extend(_entropy_layer(forms, deadline))
+            if self.edm_index or self.index:
+                # One Unicode normalization pass serves both hash-matching layers.
+                normalized = _normalize(text)
+                if self.edm_index:
+                    findings.extend(self.edm_index.matches(normalized, deadline))
+                if self.index:
+                    findings.extend(self.index.matches(normalized, deadline))
             findings.extend(_code_layer(text, deadline))
             if time.monotonic() > deadline:
                 raise TimeoutError("inspection deadline")
-            scores: dict[str, float] = {}
             # Repetition of one weak rule must not manufacture strong evidence.
-            for finding in {(row.category, row.rule_id): row for row in findings}.values():
-                previous = scores.get(finding.category, 0.0)
-                scores[finding.category] = 1 - (1 - previous) * (1 - finding.score)
+            unique = {(row.category, row.rule_id): row for row in findings}.values()
+            evidence = tuple(sorted((row.category, row.rule_id, round(row.score, 4))
+                                    for row in unique))
+            scores = fuse(evidence)
             highest = max(scores.values(), default=0.0)
-            decision = "BLOCK" if highest >= BLOCK_THRESHOLD else "REVIEW" if highest >= REVIEW_THRESHOLD else "ALLOW"
-            reason = "MATCHED_SENSITIVE_CONTENT" if decision == "BLOCK" else "AMBIGUOUS_CONTENT" if decision == "REVIEW" else "REQUIRED_CHECKS_COMPLETE"
+            decision = decide(highest)
+            reason = ("MATCHED_SENSITIVE_CONTENT" if decision == "BLOCK"
+                      else "AMBIGUOUS_CONTENT" if decision == "REVIEW"
+                      else "REQUIRED_CHECKS_COMPLETE")
             return DLPVerdict(decision, reason,
                               tuple(sorted({finding.rule_id for finding in findings})),
-                              tuple(sorted(scores)),
-                              {key: round(value, 4) for key, value in scores.items()})
+                              tuple(sorted(scores)), scores, evidence)
         except Exception:
-            return DLPVerdict("BLOCK", "INSPECTION_FAILED", ("INSPECTION_FAILED",), ("INSPECTION_ERROR",))
+            return DLPVerdict("BLOCK", "INSPECTION_FAILED", ("INSPECTION_FAILED",),
+                              ("INSPECTION_ERROR",),
+                              {"INSPECTION_ERROR": 1.0},
+                              (("INSPECTION_ERROR", "INSPECTION_FAILED", 1.0),))
 
     def inspect_file_bytes(self, name: str, data: bytes) -> DLPVerdict:
+        # Document parsers are imported on demand: a text-only gate must not pay
+        # for a PDF/OOXML stack it never calls.
+        from .file_extract import MAX_FILE_BYTES, UninspectableFile, extract_text
         if not isinstance(data, bytes) or len(data) > MAX_FILE_BYTES:
             return DLPVerdict("BLOCK", "FILE_UNINSPECTABLE", ("FILE_UNINSPECTABLE",), ("INSPECTION_ERROR",))
         try:

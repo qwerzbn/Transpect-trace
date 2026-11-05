@@ -1,8 +1,10 @@
 # Demo：AI 工具输入输出审计与拦截
 
-本文给出四层内容识别引擎的可复现离线 Demo，并按**时效性、拦截成功率、性能、防绕过**四个维度报告合成样本结果。实际请求采集与发送前阻断由独立的门控组件负责；本 Demo 尚未将四层引擎接入这些组件。
+本文给出四层内容识别引擎的可复现离线 Demo，并按**时效性、拦截成功率、性能、防绕过**四个维度报告合成样本结果。
 
-脚本直接检查内置合成文本，并自行创建一个本地 `.py` 文件供文件检查。它不读取真实 Codex 请求，也不执行文件上传。另有已独立验证的 HTTPX 发送前门控，但该门控目前使用原有 `ProtectionEngine`，没有调用本 Demo 的 `ContentDLPEngine`。整体项目模块见 [README](../README.md)。
+本 Demo **不含自己的检测逻辑**：它调用的就是发送前门控调用的那一个引擎 `transpect_trace.protect.content_dlp.ContentDLPEngine`，所以这里的数字描述的是同一份代码。真实客户端上的发送前拦截实测另见 [Hook 门控记录](development/codex-hook-gate.md)，公开语料与留出集评测见[本地评测](development/desktop-dlp-evaluation.md)。
+
+脚本直接检查内置合成文本，并自行创建一个本地 `.py` 文件供文件检查。它不读取真实 Codex 请求，也不执行文件上传，因此不证明任何实际阻断。整体项目模块见 [README](../README.md)。
 
 ## 运行
 
@@ -11,7 +13,7 @@
 uv run --no-sync python scripts/demo_io_audit.py --iterations 3000
 
 # 内容识别 DLP 引擎（本地多层：规则+校验+上下文 / 熵 / EDM / 指纹）
-uv run --no-sync python scripts/demo_content_dlp.py
+uv run --no-sync --with duckdb==2.0.0 python scripts/evaluate_desktop_dlp_datasets.py
 ```
 
 Demo 报告写入 `runs/demo-io-audit/report.json`（UTF-8）。
@@ -29,15 +31,15 @@ uv run --no-sync python scripts/probe_knowledge_mail.py --help
 
 ## 技术通道
 
-本 Demo 的采集方式是直接把合成字符串传给 `ContentDLPEngine.inspect()`，以及将脚本生成的本地文件传给 `inspect_file()`。这里没有安装 Codex Hook，也没有启动网络请求。
+本 Demo 的采集方式是直接把合成字符串传给 `ContentDLPEngine.inspect_text()`，以及将脚本生成的本地文件字节传给 `inspect_file_bytes()`。这里没有安装 Codex Hook，也没有启动网络请求。
 
-独立的 `python-httpx-native/1` 适配器在受控 CPython/HTTPX 进程的 `handle_request` / `handle_async_request` 处取得 JSON 请求正文，并在发送前调用旧 `ProtectionEngine` 判定。它的拦截验证说明该门控位置可以阻断相应 Python 请求，但不能作为新四层引擎已经拦截真实请求的证据。
+同一个引擎已接入本机 Codex 客户端的 `UserPromptSubmit` 与 `PreToolUse` 门控并实测拦截，见 [Hook 门控记录](development/codex-hook-gate.md)；本 Demo 自身不证明这一点。另有独立的 `python-httpx-native/1` 适配器在受控 CPython/HTTPX 进程的 `handle_request` / `handle_async_request` 处取得 JSON 请求正文，并在发送前调用旧 `ProtectionEngine` 判定，那是一条单独的通道。
 
 ## 四个维度的结果与口径
 
 ### 1. 时效性（离线判定耗时与独立门控证据）
 
-四层引擎同步返回判定；本 Demo 没有传输调用，因此不能测量真实请求从提交到阻断的完整时延。旧 HTTPX 门控另有以下发送前验证：
+四层引擎同步返回判定；本 Demo 没有传输调用，因此不能测量真实请求从提交到阻断的完整时延。真实客户端上的端到端拦截与每事件约 140 ms 的实测开销见 [Hook 门控记录](development/codex-hook-gate.md)。旧 HTTPX 门控另有以下发送前验证：
 
 - **构造上**：`src/transpect_trace/protect/python_bridge.py` 中 `authorize()` 在
   `original_sync(...)` 之前执行，拒绝时不调用原传输函数。该路径尚未接入四层引擎。
@@ -50,7 +52,7 @@ uv run --no-sync python scripts/probe_knowledge_mail.py --help
 
 ### 2. 拦截成功率
 
-Demo 用一个带标注、覆盖四类敏感数据的合成语料跑检出矩阵（`scripts/demo_content_dlp.py`）：
+Demo 用一个带标注、覆盖四类敏感数据的合成语料跑检出矩阵（`src/transpect_trace/protect/content_dlp.py`）：
 
 | 类别 | 样本 | 命中层 | 期望 |
 | --- | --- | --- | --- |
@@ -60,15 +62,16 @@ Demo 用一个带标注、覆盖四类敏感数据的合成语料跑检出矩阵
 | 个人信息 PII | 员工姓名+工号+SSN（同一条记录佐证） | EDM | `BLOCK` |
 | 良性 | 公开中文文本、公开单行代码、掩码口令 `********`、占位符 `${API_KEY}`、单独常见人名 | — | `ALLOW` |
 
-当前实测：敏感 6/6 识别（全部 `BLOCK`）、良性 5/5 放行。这是**覆盖内检出率**的小样本
-展示，不等于总体检出率；正式盲测与更多数据类别需单列。非 UTF-8/二进制上传记为
-`REVIEW`（OCR/二进制解析不在本轮范围），属安全动作，不计入检出成功。
+当前实测：敏感 6/6 识别（全部 `BLOCK`）、良性 4/4 放行。这是**覆盖内检出率**的小样本
+展示，不等于总体检出率；正式盲测与更多数据类别需单列。无可提取文字的二进制上传记为
+`BLOCK`（无法完整检查即拒绝），属安全动作，不计入检出成功。
 
 ### 3. 性能
 
-Demo 对内容识别引擎 `ContentDLPEngine.inspect()` 做进程内延迟基准（64 KiB 主负载，
-预热后 N 次）：报告 P50/P95/P99 与试点预算（P95 ≤ 50 ms，P99 ≤ 100 ms）对照。
-多层融合比单一正则重，参考机实测 P95 约 20–45 ms，达标。
+Demo 对 `ContentDLPEngine.inspect_text()` 做进程内延迟基准，两档负载各有预算：
+典型 prompt 8 KiB（预算 P95 ≤ 20 ms，实测 P95 约 3 ms）与大请求正文 64 KiB
+（预算 P95 ≤ 90 ms，实测 P95 约 60 ms）。预算是在本引擎上实测后留出余量定的，
+不是从别处沿用：被删掉的旧原型没有 EDM 层，且用进程内 `hash()` 做 shingle，数字不可比。
 
 口径诚实边界：该数字是**内容检查**耗时，不含跨进程 IPC 与 TLS。方案要求的
 “输入新增门控耗时”为含复制/IPC/审计的端到端值，需在真实设备上单列压测；
@@ -76,13 +79,17 @@ Demo 对内容识别引擎 `ContentDLPEngine.inspect()` 做进程内延迟基准
 
 ### 4. 防绕过（重点）：内容识别为什么不止正则
 
-纯正则一改写/一编码就失效。本 Demo 的内容识别是**本地多层融合**（`scripts/demo_content_dlp.py`），
+纯正则一改写/一编码就失效。本 Demo 的内容识别是**本地多层融合**（`src/transpect_trace/protect/content_dlp.py`），
 对标现代 DLP（Purview / Google Sensitive Data Protection / Nightfall），四层互补：
 
 1. **规则 + 校验器 + 上下文**：正则命中结构化标识后，用校验位（信用卡 Luhn）压假阳性、
    用**邻近关键词**（附近出现 `secret`/`身份证`/`ssn` 等）加权；并先对 **base64/hex 规范化
-   解码**再匹配，抹掉"换个编码就绕过"。掩码 `********`、占位符 `${API_KEY}` 识别为良性。
+   解码**再匹配，规则层与熵分析都跑在解码后的形式上，抹掉"换个编码就绕过"。银行卡除
+   Luhn 外还要求发卡行号与卡号书写分组，否则长数字串约十分之一会误判。掩码 `********`、
+   占位符 `${API_KEY}` 识别为良性。
 2. **熵分析**：长高熵 token 即使**不符合任何已知格式**也判为疑似密钥——抓正则抓不到的新密钥。
+   无佐证的高熵串（commit SHA、包哈希）单独计为 `ENTROPY_TOKEN`，部署策略默认只记录不拦；
+   带凭据短语的 `ENTROPY_TOKEN_CONTEXT` 与仅在解码后出现的 `ENTROPY_TOKEN_DECODED` 仍然拦。
 3. **EDM 精确数据匹配**：把企业**自有记录**（员工表）本地哈希后比对；要求**同一条记录的多个
    字段同时命中**（姓名+工号+SSN 的佐证）才给高分，既准又少误报，原始数据不出本地。
 4. **文档/源码指纹（IDM）**：对已知内部文档/源码做 k-gram shingle，检测**片段/部分拷贝**；

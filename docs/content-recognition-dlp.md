@@ -13,23 +13,23 @@
 | [HTTPX 发送前桥接层](../src/transpect_trace/protect/python_bridge.py) | 受控 Python 进程的 `HTTPTransport.handle_request`、`AsyncHTTPTransport.handle_async_request` | 启动时保存原方法，再以 Python 包装函数替换这两个方法；包装函数读取请求流，生成正文快照，调用本地授权接口，获准后以已检查的字节调用原方法。|
 | [Codex CLI Native Guard](../native/guard/guard.c) | 特定版本 `codex.exe` 内部的 HTTP 正文处理函数和 WSS 请求序列化函数 | 将 DLL 注入目标进程，按经验证的二进制地址使用 MinHook 安装内联跳转；HTTP 路径在调用原函数前检查正文，WSS 路径在序列化完成后检查缓冲区，再交由本地策略进程判定。|
 
-目前的四层内容识别 Demo 由脚本直接调用 `ContentDLPEngine.inspect()`；上述两条发送路径尚未接入该新引擎。HTTPX 桥接层使用 Python 方法替换，Codex Native Guard 使用 DLL 注入和 MinHook，二者不应统称为同一种 Hook。
+四层引擎已接入客户端自带 Hook 的发送前门控并在本机实测拦截（见[Hook 门控记录](development/codex-hook-gate.md)）；上述两条 Native 发送路径仍未接入该引擎。HTTPX 桥接层使用 Python 方法替换，Codex Native Guard 使用 DLL 注入和 MinHook，二者不应统称为同一种 Hook。
 
-针对**用户提交的请求文字**，推荐优先使用 Codex 官方的 [`UserPromptSubmit` 生命周期事件](https://learn.chatgpt.com/docs/hooks)。Codex 在提交用户消息时向处理程序传入 JSON，其中 `prompt` 字段是待提交的文字；处理程序可以返回 `{"decision":"block","reason":"..."}` 拒绝该消息。该接口不依赖 `codex.exe` 的内部函数地址。当前新增的 [本地处理程序原型](../scripts/demo_user_prompt_submit.py)从标准输入读取事件，调用四层 DLP 检查 `prompt`，对 `BLOCK` 和 `REVIEW` 返回阻断结果，对 `ALLOW` 不输出阻断决定。处理程序尚未加入用户或项目的 `hooks.json`，目前只完成独立协议测试。
+针对**用户提交的请求文字**，推荐优先使用 Codex 官方的 [`UserPromptSubmit` 生命周期事件](https://learn.chatgpt.com/docs/hooks)。Codex 在提交用户消息时向处理程序传入 JSON，其中 `prompt` 字段是待提交的文字；处理程序可以返回 `{"decision":"block","reason":"..."}` 拒绝该消息。该接口不依赖 `codex.exe` 的内部函数地址。该路线已落地并实测：[门控实现](../src/transpect_trace/protect/codex_hook_gate.py)从标准输入读取事件，加密归档后调用四层 DLP 检查 `prompt`，对 `BLOCK`、`REVIEW` 及任何异常返回阻断，对 `ALLOW` 不输出决定。它按客户端镜像内嵌的 JSON Schema 编写并有契约测试校验，已装入 `hooks.json` 并确认被拦用例该轮零模型请求。注意两个实测约束：**未经用户批准信任的 Hook 被静默跳过**，`command` 按空白切分且不认引号。详见[Hook 门控记录](development/codex-hook-gate.md)。
 
-如果产品自行提供输入界面，也可直接使用官方 [Codex app-server](https://learn.chatgpt.com/docs/app-server)：应用先取得用户输入并在本地检查，再通过 `turn/start.input` 提交给 Codex。该接口公开列出的输入项为 `text`、图像 URL 和本地图像路径。`UserPromptSubmit` 公开的是用户文字字段，`turn/start.input` 是客户端提交的输入；二者都不是 Codex 组装并序列化后的模型请求。官方 `PreModelRequest` 事件提供模型、轮次等诊断信息，不提供可检查和阻断的请求正文。
+如果产品自行提供输入界面，也可直接使用官方 [Codex app-server](https://learn.chatgpt.com/docs/app-server)：应用先取得用户输入并在本地检查，再通过 `turn/start.input` 提交给 Codex。该接口公开列出的输入项为 `text`、图像 URL 和本地图像路径。`UserPromptSubmit` 公开的是用户文字字段，`turn/start.input` 是客户端提交的输入；二者都不是 Codex 组装并序列化后的模型请求。官方 `PreModelRequest` 事件提供模型、轮次等诊断信息，不提供可检查的请求正文；本机实测它返回阻断决定时客户端照常发送，因此只能用于观察与计数。界面附件没有对应 Hook 事件。
 
-本方案**不修改 Codex 源码**。若保持模型请求直接由原版 Codex 发往模型服务，则继续使用进程外的 Native Guard：针对每个拟支持的 Codex 版本与运行模式，定位实际的 HTTP/WSS 请求发送函数，在正文形成后、发送前检查；增加 daemon/app-server 或新的 WSS 路径时，分别建立适配器并做源站侧拒绝验证。现有适配器仅验证固定版本 CLI 的两个函数，[清单](../deploy/guard/codex-windows-x64.json)将文件上传、其他 WSS 消息和 daemon/app-server 列为未覆盖；四层内容识别引擎也尚未接入该门控。增加更多固定地址 Hook 可以扩大已验证范围，但每次 Codex 更新都需重新确认地址、参数布局和拒绝后的执行路径。
+本方案**不修改 Codex 源码**。若保持模型请求直接由原版 Codex 发往模型服务，则继续使用进程外的 Native Guard：针对每个拟支持的 Codex 版本与运行模式，定位实际的 HTTP/WSS 请求发送函数，在正文形成后、发送前检查；增加 daemon/app-server 或新的 WSS 路径时，分别建立适配器并做源站侧拒绝验证。现有适配器仅验证固定版本 CLI 的两个函数，[清单](../deploy/guard/codex-windows-x64.json)将文件上传、其他 WSS 消息和 daemon/app-server 列为未覆盖；四层内容识别引擎尚未接入这条 Native 门控。增加更多固定地址 Hook 可以扩大已验证范围，但每次 Codex 更新都需重新确认地址、参数布局和拒绝后的执行路径。
 
 如需保留原版 Codex、同时避免维护二进制 Hook，可按 [Codex 自定义模型提供方配置](https://learn.chatgpt.com/docs/config-file/config-reference)将模型请求发往兼容 Responses API 的受控入口，在入口检查后转发。[官方网关要求](https://learn.chatgpt.com/docs/enterprise/gateway-compatibility)列出了流式响应、续传与工具调用的兼容要求。这种实现属于中转网关，只覆盖实际路由到该入口的模型流量；MCP、命令和浏览器等工具的联网行为仍需另设检查。若同时排除源码修改和中转网关，现有公开生命周期 Hook 不提供完整模型请求正文，Native Guard 的覆盖范围只能按具体版本与路径逐项验证。
 
-**上传文件需要单独采集。** 文件可能以内联 Base64 数据、`file_id`、URL 或独立上传请求出现。内联数据可从请求体解码后检查；`file_id` 和 URL 只表示引用，必须在选取、读取或上传原文件时取得字节，并记录文件摘要与后续引用的对应关系；独立上传请求要在其发送前检查正文。官方 [文件输入说明](https://developers.openai.com/api/docs/guides/file-inputs)列出了这几种形式。当前 HTTPX 桥接层只接收 JSON 请求，拒绝 `multipart/form-data`；Native Guard 的模型请求门控也不会自动取得另一条文件上传请求。现有 [内容识别原型](../scripts/demo_content_dlp.py)只能直接解析传入的 UTF-8 文本文件，PDF、图片等文件的解析尚未实现。
+**上传文件需要单独采集。** 文件可能以内联 Base64 数据、`file_id`、URL 或独立上传请求出现。内联数据可从请求体解码后检查；`file_id` 和 URL 只表示引用，必须在选取、读取或上传原文件时取得字节，并记录文件摘要与后续引用的对应关系；独立上传请求要在其发送前检查正文。官方 [文件输入说明](https://developers.openai.com/api/docs/guides/file-inputs)列出了这几种形式。当前 HTTPX 桥接层只接收 JSON 请求，拒绝 `multipart/form-data`；Native Guard 的模型请求门控也不会自动取得另一条文件上传请求。现有 [内容识别引擎](../src/transpect_trace/protect/content_dlp.py)可解析 UTF-8 文本、PDF 与 OOXML 文档；无可提取文字或含嵌入媒体的文件按拒绝处理。
 
 这里的“完整请求体”指本次客户端发送的应用层正文。若请求以 `file_id` 或 `previous_response_id` 引用服务端已有内容，单次正文并不包含文件字节或全部历史上下文；检查系统需同时保存这些引用对应的内容记录。[OpenAI 会话状态说明](https://developers.openai.com/api/docs/guides/conversation-state)介绍了通过前一次响应 ID 延续上下文的方式。
 
 ## 二、内容识别：本地多层判定
 
-[内容识别原型](../scripts/demo_content_dlp.py)在本机处理文本和 UTF-8 文件，不向外部分类服务提交待检内容。引擎按敏感类别汇总以下四类证据：
+[内容识别引擎](../src/transpect_trace/protect/content_dlp.py)在本机处理文本和文件，不向外部分类服务提交待检内容。引擎按敏感类别汇总以下四类证据：
 
 1. **规则、校验与上下文。** 识别结构化密钥、私钥标记和常见个人信息格式；使用信用卡 Luhn 校验、邻近关键词及占位符排除规则调整置信度。对符合条件的 Base64 和十六进制片段先解码，再检查还原文本。
 2. **熵分析。** 对较长、字符分布复杂的令牌生成疑似密钥证据，用于补充已知格式规则。高熵本身不足以证明令牌为真实密钥。

@@ -52,7 +52,10 @@ def check(root=ROOT,with_local_evidence=False):
     required+=['native','schemas','tests','scripts','deploy','patches','.github']
     missing=[rel for rel in required if not (root/rel).is_dir()]
     tracked=subprocess.check_output(['git','-C',str(root),'ls-files','-z']).decode('utf-8').split('\0')
-    allowed=set(json.loads((root/'release-files.json').read_text(encoding='utf-8'))['files'])
+    manifest=json.loads((root/'release-files.json').read_text(encoding='utf-8'))
+    # Binary test fixtures are listed separately and audited by pinned digest in
+    # scripts/audit_release.py; both lists together are the tracked allowlist.
+    allowed=set(manifest['files'])|set(manifest.get('binary_fixtures') or {})
     forbidden=[rel for rel in tracked if rel and (root/rel).is_file() and (rel not in allowed or rel.split('/')[0] in {'.venv','.external','build','runs','dist','.idea'}
                or Path(rel).name=='.env' or (Path(rel).name.startswith('.env.') and Path(rel).name!='.env.example'))]
     ignored={rel:subprocess.run(['git','-C',str(root),'check-ignore','--quiet','--',rel],capture_output=True).returncode==0

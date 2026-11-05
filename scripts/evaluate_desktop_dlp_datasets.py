@@ -20,7 +20,12 @@ from zipfile import ZipFile, ZipInfo
 
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
-from transpect_trace.protect.content_dlp import ContentDLPEngine, EDMIndex, FingerprintIndex
+from transpect_trace.protect.codex_hook_gate import (
+    DEFAULT_ADVISORY_RULE_IDS, DEFAULT_ENFORCED_CATEGORIES,
+)
+from transpect_trace.protect.content_dlp import (
+    ContentDLPEngine, DLPVerdict, EDMIndex, FingerprintIndex, decide, fuse,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +63,22 @@ DATASETS = {
         "sha256": "4ddacd78dfac49b723032de5e1c29c432a44049245e03a8ea960c86bbf3b765c",
         "size": 853574,
     },
+    # Held out on purpose. The three corpora above were read while the rules
+    # were being adjusted, so they are development data. This validation split
+    # was first read after the detector was frozen, and the publisher ships a
+    # `masked_text` counterpart for every row, giving a false-positive control
+    # that is not of our own making.
+    "ai4privacy_en_validation": {
+        "id": "ai4privacy/pii-masking-400k",
+        "revision": "414d0a3b5798a152588a0828f1c08a5787de10f4",
+        "file": "ai4privacy-validation-en.jsonl",
+        "source_path": "data/validation/1en.jsonl",
+        "sha256": "e77bf977fd8a8b722ff859abd46bf7d20fb46b596cc139e55df32ebee88fcb39",
+        "size": 21269852,
+        "holdout": True,
+    },
 }
+HOLDOUT = tuple(name for name, row in DATASETS.items() if row.get("holdout"))
 
 _FAKE_SECRET = "Ab3x7Q2m9Pv4Na6Ty8Rz0Ls5Kb1Dc3Fh"
 _KNOWN_DOC = ("Project Nebula confidential roadmap phase alpha ships the internal review workflow "
@@ -267,6 +287,26 @@ def _rows(paths: dict[str, Path]):
                 yield source, str(row["id"]), row["text"], {
                     str(entity.get("type", "")).lower() for entity in row.get("entities", [])
                 }, _redact_entities(row["text"], (entity.get("text") for entity in row.get("entities", [])))
+    yield from _ai4privacy_rows(paths["ai4privacy_en_validation"])
+
+
+def _ai4privacy_rows(path: Path):
+    """Use the publisher's own `masked_text` as the redacted counterpart."""
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            row = json.loads(line)
+            mask = row["privacy_mask"]
+            if isinstance(mask, str):
+                # The publisher stores a Python list representation here.
+                mask = ast.literal_eval(mask)
+            if not isinstance(mask, list):
+                raise ValueError("unexpected ai4privacy privacy_mask")
+            labels = {str(item.get("label", "")).lower() for item in mask}
+            masked = row["masked_text"]
+            if not isinstance(masked, str):
+                raise ValueError("unexpected ai4privacy masked_text")
+            yield ("ai4privacy_en_validation", str(row["uid"]), row["source_text"],
+                   labels, masked)
 
 
 def _select(rows, per_dataset: int, seed: str):
@@ -283,6 +323,21 @@ def _select(rows, per_dataset: int, seed: str):
         yield from ranked if per_dataset == 0 else ranked[:per_dataset]
 
 
+def gate_action(verdict: DLPVerdict) -> str:
+    """What the shipped gate policy would do, not just what the engine scored.
+
+    The engine reports every finding; the gate acts on a subset. Reporting only
+    the engine decision overstates how often a deployment would actually deny.
+    """
+    if verdict.reason in {"INSPECTION_FAILED", "TEXT_UNINSPECTABLE",
+                          "FILE_UNINSPECTABLE"}:
+        return "BLOCK"
+    acted = tuple(item for item in verdict.evidence
+                  if item[0] in DEFAULT_ENFORCED_CATEGORIES
+                  and item[1] not in DEFAULT_ADVISORY_RULE_IDS)
+    return decide(max(fuse(acted).values(), default=0.0))
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     if not values:
         return 0.0
@@ -293,7 +348,9 @@ def _percentile(values: list[float], fraction: float) -> float:
 def evaluate(paths: dict[str, Path], *, per_dataset: int = 0, seed: str = "2026-11-04") -> dict:
     engine = ContentDLPEngine()
     counts = defaultdict(Counter)
+    gate_counts = defaultdict(Counter)
     redacted_counts = defaultdict(Counter)
+    redacted_gate_counts = defaultdict(Counter)
     label_counts = defaultdict(lambda: defaultdict(Counter))
     timings = defaultdict(list)
     for source, _, body, labels, redacted in _select(_rows(paths), per_dataset, seed):
@@ -302,13 +359,18 @@ def evaluate(paths: dict[str, Path], *, per_dataset: int = 0, seed: str = "2026-
         timings[source].append((time.perf_counter() - start) * 1000)
         counts[source][verdict.decision] += 1
         counts[source]["rows"] += 1
-        redacted_counts[source][engine.inspect_text(redacted).decision] += 1
+        gate_counts[source][gate_action(verdict)] += 1
+        redacted_verdict = engine.inspect_text(redacted)
+        redacted_counts[source][redacted_verdict.decision] += 1
+        redacted_gate_counts[source][gate_action(redacted_verdict)] += 1
         for label in labels:
             label_counts[source][label][verdict.decision] += 1
     return {
-        "schema": "transpect.desktop-dlp.dataset-evaluation/1.1",
+        "schema": "transpect.desktop-dlp.dataset-evaluation/1.2",
         "seed": seed, "sample_per_dataset": per_dataset,
         "selection_mode": "full" if per_dataset == 0 else "hash_ranked_sample",
+        "development_corpora": sorted(set(DATASETS) - set(HOLDOUT)),
+        "holdout_corpora": list(HOLDOUT),
         "blind_holdout": False, "policy_truth_available_for_public_corpora": False,
         "live_enforcement_verified": False,
         "public_corpus_registrations_loaded": False,
@@ -319,14 +381,22 @@ def evaluate(paths: dict[str, Path], *, per_dataset: int = 0, seed: str = "2026-
                            "apply only to the separate synthetic fixtures. "
                            "Redacted counterparts remove annotated values and provide only an approximate "
                            "false-positive diagnostic because unannotated sensitive content may remain. "
-                           "These corpora were used during development, so this is not a blind holdout. "
+                           "The corpora listed under development_corpora were read while rules were being "
+                           "adjusted; holdout_corpora were first read after the detector was frozen, and "
+                           "their redacted counterpart is the publisher's own masked_text rather than ours. "
+                           "A holdout is still not a blind labelled test set: entity labels are not policy "
+                           "actions, and no independent annotator produced expected decisions. "
                            "A future desktop gate must deny REVIEW; live enforcement is not verified here. "
                            "The confusion matrix below uses separate developer-made synthetic fixtures "
                            "with explicit policy labels."),
         "datasets": {name: {"id": descriptor["id"], "revision": descriptor["revision"],
                             "sha256": descriptor["sha256"],
+                            "role": "holdout" if descriptor.get("holdout") else "development",
                             "decisions": dict(counts[name]),
+                            "gate_policy_actions": dict(gate_counts[name]),
                             "redacted_proxy_decisions": dict(redacted_counts[name]),
+                            "redacted_proxy_gate_policy_actions":
+                                dict(redacted_gate_counts[name]),
                             "by_entity_label": {label: dict(counter) for label, counter in sorted(label_counts[name].items())},
                             "latency_ms": {"p50": _percentile(timings[name], .5),
                                            "p95": _percentile(timings[name], .95),
@@ -351,7 +421,11 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for name, row in result["datasets"].items():
-        print(name, row["decisions"], "redacted_proxy", row["redacted_proxy_decisions"], row["latency_ms"])
+        print(f'{name} [{row["role"]}]', row["decisions"],
+              "gate", row["gate_policy_actions"],
+              "redacted", row["redacted_proxy_decisions"],
+              "redacted_gate", row["redacted_proxy_gate_policy_actions"],
+              row["latency_ms"])
     print("synthetic_fixture_matrix", result["fixtures"]["matrix"])
     print("known_miss", result["fixtures"]["known_miss"])
     print(args.output)

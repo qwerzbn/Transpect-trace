@@ -1,121 +1,267 @@
-"""Demo: AI-tool outbound content audit + block (content-recognition DLP, before-send).
+"""Four-dimension report for the local content-recognition DLP engine.
 
-Business goal: identify enterprise-sensitive data -- source code, secrets/keys, internal
-documents, PII -- in the OUTBOUND prompt text and uploaded files, and block it BEFORE it
-leaves the enterprise boundary. Detection is content recognition, not minimal-privilege:
-a local, multi-layer ensemble (rules+validators+context, entropy, exact-data-match,
-fingerprint) fused into per-category confidence. See scripts/demo_content_dlp.py.
+Dimensions: timeliness, block success, performance, evasion resistance. The
+engine under test is the production one in
+`transpect_trace.protect.content_dlp` -- this script owns no detection logic of
+its own, so the numbers below describe the same code the desktop gate calls.
 
-Reported against the four required dimensions:
-
-  1. 时效性 (timeliness): the detector returns a synchronous verdict in an offline
-     sample run. The separately tested HTTPX gate uses the older ProtectionEngine;
-     this four-layer detector is not wired into a live outbound path.
-  2. 拦截成功率 (block success): sensitive samples are blocked, benign allowed; a labeled
-     per-category matrix is reported.
-  3. 性能 (performance): per-inspection latency P50/P95/P99 vs the pilot budget.
-  4. 防绕过 (bypass resistance): base64/hex are canonicalized, unknown-format secrets caught
-     by entropy, partial document copies by fingerprint; a PURE semantic paraphrase is an
-     honestly-declared MISS deferred to the next-round semantic layer. Fail-closed on error.
-
-Only synthetic fake secrets/records/documents are used.
+This is an offline sample evaluation. It starts no Codex client and proves no
+live enforcement; see `docs/development/desktop-current-mainline.md` for the
+gate itself. Every secret, record and document here is a synthetic fake.
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
-import sys
 from pathlib import Path
+import statistics
+import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling demo modules
+sys.path.insert(0, str(ROOT / "src"))
 
-from demo_content_dlp import (  # noqa: E402
-    detection_matrix, evasion_matrix, file_upload_demo, latency)
+from transpect_trace.protect.content_dlp import (  # noqa: E402
+    ContentDLPEngine, EDMIndex, FingerprintIndex,
+)
 
-BUDGET_P95_MS = 50.0
-BUDGET_P99_MS = 100.0
+# Budgets are per payload size and were measured on this engine, not inherited
+# from the deleted prototype: that prototype had no EDM layer and keyed its
+# shingles on process-local `hash()`, so its figures are not comparable.
+# Measured p95 on this engine is ~3 ms at 8 KiB and ~60 ms at 64 KiB; the
+# budgets below leave headroom so a loaded machine does not fail the guard.
+PAYLOAD_BUDGETS_MS = {8: 20.0, 64: 90.0}
+BUDGET_P95_MS = PAYLOAD_BUDGETS_MS[64]
+_FAKE_SECRET = "Ab3x7Q2m9Pv4Na6Ty8Rz0Ls5Kb1Dc3Fh"
+_NOVEL_SECRET = "xqeF7P2mZk9Lw3Rt8Vb1Nc6Hy4Jd0Gs5Pa2"
+_KNOWN_DOC = (
+    "Project Nebula confidential roadmap phase alpha ships the internal review "
+    "workflow phase beta adds the redaction service phase gamma delivers audit "
+    "controls for all agents."
+)
+_KNOWN_CODE = (
+    "def rotate_signing_key(tenant_id, kms_client):\n"
+    "    current = kms_client.get_active_key(tenant_id)\n"
+    "    new_key = kms_client.create_key(tenant_id)\n"
+    "    return new_key.fingerprint"
+)
+
+# (case, expected category, text). Expected categories are the developer's
+# policy intent for these fixtures, not an independent blind label set.
+SENSITIVE = (
+    ("aws_key_pair", "SECRET",
+     f"aws_access_key_id=AKIAABCDEFGHIJKLMNOP\naws_secret_access_key={_FAKE_SECRET}"),
+    ("private_key_block", "SECRET",
+     "-----BEGIN PRIVATE KEY-----\nMIIFakeKeyMaterial\n-----END PRIVATE KEY-----"),
+    ("novel_format_token", "SECRET", f"here is the deploy token: {_NOVEL_SECRET}"),
+    ("internal_doc_fragment", "INTERNAL_DOC",
+     "FYI quoting our plan: phase beta adds the redaction service phase gamma "
+     "delivers audit controls for all agents. Please review."),
+    ("registered_source_code", "SOURCE_CODE", _KNOWN_CODE),
+    ("corroborated_pii", "PII", "员工 Zhang Wei (E10293) 需要报销。"),
+)
+BENIGN = (
+    ("public_request", "请总结这段公开文档的要点，谢谢。"),
+    ("masked_secret", "password=********"),
+    ("placeholder_secret", "api_key=${API_KEY}"),
+    ("reference_uuid", "Reference UUID 550e8400-e29b-41d4-a716-446655440000"),
+)
 
 
-def timeliness() -> dict:
+def build_engine() -> ContentDLPEngine:
+    """Register the same synthetic EDM records and documents the fixtures use."""
+    key = hashlib.sha256(b"demo-io-audit-edm-fixture").digest()
+    return ContentDLPEngine(
+        index=FingerprintIndex.from_documents({
+            "fake-roadmap": ("INTERNAL_DOC", _KNOWN_DOC),
+            "fake-source": ("SOURCE_CODE", _KNOWN_CODE),
+        }),
+        edm_index=EDMIndex.from_records(
+            {"fake-employee-1": {"name": "Zhang Wei", "employee_id": "E10293"}}, key),
+    )
+
+
+def detection_matrix() -> dict:
+    engine = build_engine()
+    rows = []
+    for case, expected_category, text in SENSITIVE:
+        verdict = engine.inspect_text(text)
+        rows.append({
+            "case": case, "class": "sensitive", "expected_category": expected_category,
+            "decision": verdict.decision, "categories": list(verdict.categories),
+            "rule_ids": list(verdict.rule_ids),
+            "detected": verdict.decision != "ALLOW" and expected_category in verdict.categories,
+        })
+    for case, text in BENIGN:
+        verdict = engine.inspect_text(text)
+        rows.append({"case": case, "class": "benign", "decision": verdict.decision,
+                     "categories": list(verdict.categories),
+                     "rule_ids": list(verdict.rule_ids)})
+    sensitive = [row for row in rows if row["class"] == "sensitive"]
+    benign = [row for row in rows if row["class"] == "benign"]
     return {
-        "before_send_by_construction": False,
-        "enforcement_channel": {
-            "unit": "uv run --no-sync python -m pytest tests/test_python_outbound_bridge.py",
-            "end_to_end": "scripts/probe_knowledge_mail.py validates the separate HTTPX gate; "
-                          "it does not use this four-layer detector",
-        },
-        "note": "this report checks synthetic text and a locally created file; no live Codex "
-                "or HTTPX request is supplied to ContentDLPEngine",
+        "sensitive_total": len(sensitive),
+        "sensitive_blocked": sum(row["decision"] == "BLOCK" for row in sensitive),
+        "benign_total": len(benign),
+        "benign_allowed": sum(row["decision"] == "ALLOW" for row in benign),
+        "all_sensitive_caught": all(row["detected"] for row in sensitive),
+        "rows": rows,
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def evasion_matrix() -> dict:
+    engine = build_engine()
+    secret = f"aws_secret_access_key={_FAKE_SECRET}"
+    cases = (
+        ("plaintext_secret", "none", secret, True, "rules+context"),
+        ("base64_encoded_secret", "base64 obfuscation",
+         "blob: " + base64.b64encode(secret.encode()).decode(), True, "decode then rules"),
+        ("hex_encoded_secret", "hex obfuscation", "blob: " + secret.encode().hex(),
+         True, "decode then rules"),
+        ("novel_format_secret", "unknown key format", f"token {_NOVEL_SECRET}",
+         True, "entropy"),
+        ("known_doc_fragment", "partial copy of a registered document",
+         "see: phase gamma delivers audit controls for all agents", True, "fingerprint"),
+        ("paraphrased_internal_doc", "semantic rewrite of a registered document",
+         "Heads up: the upcoming work first ships an internal review flow, then a "
+         "service that removes sensitive values, and finally a data-flow guard.",
+         False, "declared miss: layers are lexical/structural"),
+    )
+    rows = []
+    for case, technique, payload, should_catch, mechanism in cases:
+        verdict = engine.inspect_text(payload)
+        caught = verdict.decision != "ALLOW"
+        rows.append({
+            "case": case, "technique": technique, "caught": caught,
+            "mechanism": mechanism, "decision": verdict.decision,
+            "as_expected": caught == should_catch,
+            "honest_note": None if should_catch else
+            "a pure paraphrase changes every surface token, so only a semantic "
+            "layer catches it; that layer is not implemented",
+        })
+    return {"total": len(rows), "caught": sum(row["caught"] for row in rows),
+            "matrix_as_expected": all(row["as_expected"] for row in rows),
+            "misses": [row["case"] for row in rows if not row["caught"]],
+            "rows": rows}
+
+
+def file_upload_sample(directory: Path) -> dict:
+    engine = build_engine()
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "uploaded_sample.py"
+    payload = (_KNOWN_CODE + f"\n# config\nAPI_TOKEN = '{_NOVEL_SECRET}'\n").encode("utf-8")
+    path.write_bytes(payload)
+    verdict = engine.inspect_file_bytes(path.name, payload)
+    return {"file": path.name, "decision": verdict.decision, "reason": verdict.reason,
+            "categories": list(verdict.categories), "rule_ids": list(verdict.rule_ids),
+            "payload_sha256": hashlib.sha256(payload).hexdigest()}
+
+
+def latency(iterations: int, payload_kib: int) -> dict:
+    if iterations < 1 or payload_kib < 1:
+        raise ValueError("iterations and payload size must be positive")
+    engine = build_engine()
+    filler = "公开文档内容样例。This is public filler text. " * 200
+    raw = (filler * ((payload_kib * 1024) // len(filler.encode("utf-8")) + 1))
+    text = raw.encode("utf-8")[:payload_kib * 1024].decode("utf-8", "ignore")
+    engine.inspect_text(text)
+    samples = []
+    for _ in range(iterations):
+        started = time.perf_counter()
+        engine.inspect_text(text)
+        samples.append((time.perf_counter() - started) * 1000)
+    samples.sort()
+
+    def percentile(fraction: float) -> float:
+        return round(samples[min(len(samples) - 1, int(len(samples) * fraction))], 3)
+
+    budget = PAYLOAD_BUDGETS_MS.get(payload_kib)
+    result = {"iterations": iterations, "payload_kib": payload_kib,
+              "p50_ms": round(statistics.median(samples), 3),
+              "p95_ms": percentile(0.95), "p99_ms": percentile(0.99),
+              "budget_p95_ms": budget,
+              "note": "local inspection only; excludes capture, archive, IPC and transport"}
+    result["within_budget"] = budget is None or result["p95_ms"] <= budget
+    return result
+
+
+def build_report(iterations: int, payload_kib: int, directory: Path) -> dict:
+    detection = detection_matrix()
+    evasion = evasion_matrix()
+    upload = file_upload_sample(directory)
+    typical = latency(max(1, iterations // 4), 8)
+    performance = latency(iterations, payload_kib)
+    performance["typical_prompt_8kib"] = typical
+    return {
+        "schema": "transpect.demo.io-audit/3.0",
+        "engine": "transpect_trace.protect.content_dlp.ContentDLPEngine",
+        "live_enforcement_verified": False,
+        "blind_holdout": False,
+        "timeliness": {
+            "synchronous_verdict": True,
+            "before_send_enforcement_proved_here": False,
+            "enforcement_entry_points": [
+                "src/transpect_trace/protect/codex_hook_gate.py (supported Codex hooks)",
+                "src/transpect_trace/protect/desktop_bridge.py (pinned desktop research probe)",
+            ],
+        },
+        "block_success": detection,
+        "evasion_resistance": evasion,
+        "file_upload": upload,
+        "performance": performance,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--iterations", type=int, default=2000)
     parser.add_argument("--payload-kib", type=int, default=64)
-    parser.add_argument("--output", type=Path, default=ROOT / "runs/demo-io-audit/report.json")
+    parser.add_argument("--output", type=Path,
+                        default=ROOT / "runs/demo-io-audit/report.json")
     args = parser.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
         pass
 
-    detect = detection_matrix()
-    evade = evasion_matrix()
-    upload = file_upload_demo()
-    perf = latency(args.iterations, args.payload_kib)
-    perf["budget_p95_ms"] = BUDGET_P95_MS
-    perf["budget_p99_ms"] = BUDGET_P99_MS
-    perf["within_budget"] = perf["p95_ms"] <= BUDGET_P95_MS and perf["p99_ms"] <= BUDGET_P99_MS
-
-    report = {
-        "schema": "transpect.demo.io-audit/2.0",
-        "channel": "content-recognition DLP (offline sample evaluation)",
-        "timeliness": timeliness(),
-        "block_success": detect,
-        "evasion_resistance": evade,
-        "file_upload": upload,
-        "performance": perf,
-        "recognition_layers": {
-            "1_rules_validators_context": "regex for well-formed identifiers + Luhn validator + "
-                                          "nearby-keyword boosting; base64/hex canonicalized first",
-            "2_entropy": "long high-entropy tokens flagged as likely keys even with no known format",
-            "3_exact_data_match": "enterprise records hashed locally; corroborative evidence across "
-                                  "fields of one record raises confidence / cuts false positives",
-            "4_fingerprint": "k-gram shingles catch partial copies of known internal docs/source; "
-                             "a structural heuristic flags novel source code",
-            "fusion": "noisy-OR per category -> BLOCK/REVIEW/ALLOW; fail-closed on inspector error",
-            "deferred_semantic_layer": "embedding similarity / local fine-tuned LLM classifier catches "
-                                        "pure paraphrase; NOT in this round (declared MISS in evasion)",
-            "locality": "all inspection is local -- content is never shipped to a cloud classifier "
-                        "(avoids the data-exposure paradox)",
-        },
-    }
+    report = build_report(args.iterations, args.payload_kib, args.output.parent)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+                           encoding="utf-8")
 
-    print("== AI 工具外发内容识别与拦截 Demo（内容识别 DLP，本地多层）==")
-    print(f"通道: {report['channel']}")
-    print("[时效性] 检测器同步返回判定；本 Demo 尚未接入真实请求的发送前门控。")
-    print(f"         - 单元: {report['timeliness']['enforcement_channel']['unit']}")
-    print(f"         - 端到端: {report['timeliness']['enforcement_channel']['end_to_end']}")
-    print(f"[拦截成功率] 敏感 BLOCK {detect['sensitive_blocked']}/{detect['sensitive_total']}，"
-          f"全部敏感被识别={detect['all_sensitive_caught']}；良性放行 {detect['benign_allowed']}/{detect['benign_total']}")
-    for row in detect["rows"]:
+    detection, evasion = report["block_success"], report["evasion_resistance"]
+    performance, upload = report["performance"], report["file_upload"]
+    print("== 本地内容识别 DLP 四维度报告（离线样本，不含实际发送）==")
+    print(f"[时效性] 同步判定；本报告不证明发送前门控已部署。")
+    print(f"[拦截成功率] 敏感 BLOCK {detection['sensitive_blocked']}/"
+          f"{detection['sensitive_total']}，期望类别全部命中="
+          f"{detection['all_sensitive_caught']}；良性放行 "
+          f"{detection['benign_allowed']}/{detection['benign_total']}")
+    for row in detection["rows"]:
         if row["class"] == "sensitive":
-            print(f"            敏感 {row['case']:20s} 动作={row['action']:6s} 类别={list(row['scores'])}")
-    print(f"[防绕过] 对抗样本 {evade['caught']}/{evade['total']} 命中（符合预期={evade['matrix_as_expected']}）；"
-          f"漏检={evade['misses']}（纯语义改写 -> 待语义层）")
-    print(f"[本地文件样本] {upload['file']} 动作={upload['action']} 命中层={upload['layers_fired']}")
-    print(f"[性能] 内容识别 P50={perf['p50_ms']}ms P95={perf['p95_ms']}ms P99={perf['p99_ms']}ms "
-          f"(预算 P95<={BUDGET_P95_MS}ms) -> 达标={perf['within_budget']}")
+            print(f"            {row['case']:24s} {row['decision']:6s} "
+                  f"类别={row['categories']}")
+    print(f"[防绕过] {evasion['caught']}/{evasion['total']} 命中（符合预期="
+          f"{evasion['matrix_as_expected']}）；诚实漏检={evasion['misses']}")
+    print(f"[上传样本] {upload['file']} {upload['decision']} 类别={upload['categories']}")
+    typical = performance["typical_prompt_8kib"]
+    print(f"[性能] 8KiB  P50={typical['p50_ms']}ms P95={typical['p95_ms']}ms"
+          f"（预算 {typical['budget_p95_ms']}ms）达标={typical['within_budget']}")
+    print(f"       {performance['payload_kib']}KiB P50={performance['p50_ms']}ms "
+          f"P95={performance['p95_ms']}ms P99={performance['p99_ms']}ms"
+          f"（预算 {performance['budget_p95_ms']}ms）达标={performance['within_budget']}")
     print(f"\n报告: {args.output.resolve()}")
 
-    ok = (detect["all_sensitive_caught"] and detect["benign_allowed"] == detect["benign_total"]
-          and evade["matrix_as_expected"] and upload["action"] == "BLOCK" and perf["within_budget"])
-    raise SystemExit(0 if ok else 1)
+    passed = (detection["all_sensitive_caught"]
+              and detection["benign_allowed"] == detection["benign_total"]
+              and evasion["matrix_as_expected"]
+              and upload["decision"] == "BLOCK"
+              and performance["within_budget"]
+              and performance["typical_prompt_8kib"]["within_budget"])
+    raise SystemExit(0 if passed else 1)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@
 | `ovmf` | `2024.02-2ubuntu0.10` | 使用 `OVMF_CODE_4M.secboot.fd` 与 Microsoft 预置密钥的 `OVMF_VARS_4M.ms.fd`。 |
 | `qemu-system-gui` | `1:8.2.2+ds-0ubuntu1.18` | 通过已存在的 WSLg 显示安装界面。 |
 
-预检已经实际启动 `swtpm`，并让无磁盘 QEMU 通过 KVM、Unix socket 和 `tpm-tis` 接口连接它；QEMU monitor 返回 `tpm0`。预检没有启动 Windows 安装，也**不打开**现有 `codex-desktop-win11.qcow2`。Linux QEMU、`swtpm`、OVMF 固件及变量模板的 SHA-256 固定在 [WSL 启动脚本](/D:/code/transpect-trace/scripts/start_desktop_dlp_vm_wsl.sh) 中。ISO 和客体媒体继续按 `runs/desktop-vm/pins.json` 校验；进入 `install` 或 `run` 时，脚本才检查虚拟硬盘头部至少声明 64 GiB，当前磁盘为 80 GiB。
+预检已经实际启动 `swtpm`，并让无磁盘 QEMU 通过 KVM、Unix socket 和 `tpm-tis` 接口连接它；QEMU monitor 返回 `tpm0`。预检没有启动 Windows 安装，也**不打开**现有 `codex-desktop-win11.qcow2`。Linux QEMU、`swtpm`、OVMF 固件及变量模板的 SHA-256 固定在 [WSL 启动脚本](../../scripts/start_desktop_dlp_vm_wsl.sh) 中。ISO 和客体媒体继续按 `runs/desktop-vm/pins.json` 校验；进入 `install` 或 `run` 时，脚本才检查虚拟硬盘头部至少声明 64 GiB，当前磁盘为 80 GiB。
 
 ## 运行命令
 

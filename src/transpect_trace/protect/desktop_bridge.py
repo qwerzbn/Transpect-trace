@@ -47,6 +47,9 @@ _WIRE_START_MS = "x-codex-ws-stream-request-start-ms"
 _WIRE_TURN_METADATA = "x-codex-turn-metadata"
 PENDING_APPROVAL_TTL = timedelta(minutes=5)
 MAX_PENDING_APPROVALS = 1024
+# Approved references expire with the archive retention, which is days long. A
+# long-lived gate needs a hard cap as well, or the map grows without bound.
+MAX_APPROVED_REFERENCES = 8192
 
 
 def _nested_field_context(value: object) -> str:
@@ -229,6 +232,8 @@ class DesktopDLPBridge:
                     <= datetime.now(timezone.utc) - PENDING_APPROVAL_TTL
                     or reference_id in self._references):
                 raise ValueError("file reference has no matching approved upload")
+            if len(self._references) >= MAX_APPROVED_REFERENCES:
+                raise ValueError("approved file reference capacity reached")
             # A deleted or tampered encrypted snapshot cannot authorize a new ID.
             stored, _ = self.archive.read(approval.receipt.record_id)
             if stored != approval.receipt:

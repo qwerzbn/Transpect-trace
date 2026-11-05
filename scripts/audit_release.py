@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,11 @@ from _build_support import ROOT
 def audit(root=ROOT,working_tree=False):
     manifest=json.loads((root/"release-files.json").read_text(encoding="utf-8"))
     allowed=set(manifest["files"])
+    # A handful of test fixtures must be binary: the Office parsing tests need
+    # real OOXML packages. They are admitted by pinned digest instead of by a
+    # text scan, so an edited fixture still fails this audit.
+    binary_fixtures=dict(manifest.get("binary_fixtures") or {})
+    allowed |= set(binary_fixtures)
     tracked=set(filter(None,subprocess.check_output(
         ["git","-C",str(root),"ls-files","-z"]).decode("utf-8").split("\0")))
     issues=[]
@@ -34,6 +40,16 @@ def audit(root=ROOT,working_tree=False):
         resolved=path.resolve()
         if not resolved.is_relative_to(root.resolve()) or path.is_symlink():
             issues.append({"path":name,"reason":"outside_release_root"})
+            continue
+        if name in binary_fixtures:
+            raw=subprocess.check_output(["git","-C",str(root),"show",":"+name]) if (
+                name in tracked and not working_tree) else path.read_bytes()
+            total+=len(raw)
+            digest=hashlib.sha256(raw).hexdigest()
+            if digest!=binary_fixtures[name]:
+                issues.append({"path":name,"reason":"binary_fixture_digest_mismatch"})
+            elif len(raw)>1024*1024:
+                issues.append({"path":name,"reason":"unexpected_large_file"})
             continue
         if path.suffix.lower() in {".exe",".dll",".pyd",".pdb",".pyc",".key",".pem",".zip",".xz",".docx",".pdf"} or any(
             part in {"runs","reports","build","dist",".external",".venv","__pycache__"} or part.startswith(".env")
