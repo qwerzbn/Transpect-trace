@@ -13,3 +13,6 @@ src/transpect_trace/protect/content_dlp.py       text eol=lf
 src/transpect_trace/protect/native_collection.py text eol=crlf
 src/transpect_trace/protect/collection_eval.py   text eol=crlf
 native/guard/guard.c                             text eol=crlf
+
+# Shell scripts must keep LF to run under bash.
+*.sh text eol=lf

@@ -1,0 +1,24 @@
+{
+  "schema": "transpect.desktop-guard.pin/1.0",
+  "codex_desktop_version": "26.1103.3517.0",
+  "package_full_name": "OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0",
+  "backend": {
+    "version": "codex-cli 0.167.0-alpha.3.2",
+    "sha256": "40ecc3d8b6899afd8f935a8cccb7d53ba41ffd7c199f679e186d30ddd0d0bf39"
+  },
+  "hooks": {
+    "http": {"rva": "0xab2d670", "prefix_hex": "5541574156415541545657534881ec28"},
+    "wss": {"rva": "0x400c4d0", "prefix_hex": "5541574156415541545657534881ecd8"},
+    "drop_headers": {"rva": "0xa6410", "prefix_hex": "555657534883ec58"},
+    "api_error_map": {"rva": "0x3fff370", "prefix_hex": "554157415641554154565753"}
+  },
+  "abi": {
+    "http_denied_tag": 3,
+    "wss_success_tag": 32,
+    "wss_denied_tag": 25
+  },
+  "validated_by": [
+    "runs/scratch/adapt-26.1103/nonretry-validation-summary-v3.json",
+    "docs/development/desktop-system-hook-demo.md#2026-11-08-全局实机测试"
+  ]
+}

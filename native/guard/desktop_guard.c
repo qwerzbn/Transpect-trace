@@ -1,0 +1,561 @@
+/* Production desktop guard for the pinned Codex desktop backend.
+ *
+ * Forked from guard.c, which stays frozen because its bytes are pinned by the
+ * isolated lab evidence. Detours, pipe protocol and the nonretry error
+ * mapping are unchanged; only the controller lease differs:
+ *
+ *   ACTIVE   a controller thread owns the lease mutex  -> ask the pipe
+ *   STOPPED  lease free and the stop event is set      -> pass through
+ *   LOST     lease free and the stop event is not set  -> deny (fail closed)
+ *
+ * Hooks are never removed, so a new controller can take the lease of the same
+ * backend process and resume inspection without restarting Codex. */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <bcrypt.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "third_party/minhook/include/MinHook.h"
+#define JSMN_STRICT
+#include "third_party/jsmn/jsmn.h"
+
+/* Pin addresses default to the validated codex-cli 0.162.0-alpha.17.2 build and
+ * are overridable at build time (-DHTTP_RVA=...) so re-pinning to a new, equally
+ * validated build is a data + rebuild step, not a source edit. See
+ * deploy/guard/codex-windows-x64.json and scripts/build_guard_native.py. */
+#ifndef HTTP_RVA
+#define HTTP_RVA 0x09d96b10
+#endif
+#ifndef WSS_RVA
+#define WSS_RVA 0x03d6daa0
+#endif
+#ifndef DROP_HEADERS_RVA
+#define DROP_HEADERS_RVA 0x000eeb20
+#endif
+#ifndef HTTP_ENTRY_PREFIX_BYTES
+#define HTTP_ENTRY_PREFIX_BYTES {0x55,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x56,0x57,0x53}
+#endif
+#ifndef WSS_ENTRY_PREFIX_BYTES
+#define WSS_ENTRY_PREFIX_BYTES {0x55,0x56,0x57,0x53,0x48,0x83,0xec,0x68}
+#endif
+#ifndef WSS_SUCCESS_TAG
+#define WSS_SUCCESS_TAG 0x1c
+#endif
+#ifndef WSS_DENIED_TAG
+#define WSS_DENIED_TAG 0x0d
+#endif
+#ifndef HTTP_DENIED_TAG
+#define HTTP_DENIED_TAG 3
+#endif
+#ifndef HTTP_EMPTY_ERROR_STRING
+#define HTTP_EMPTY_ERROR_STRING 0
+#endif
+#ifndef TTRACE_FAIL_STOP_DENY
+#define TTRACE_FAIL_STOP_DENY 0
+#endif
+#ifndef TTRACE_GRACEFUL_LEASE
+#define TTRACE_GRACEFUL_LEASE 0
+#endif
+#ifndef TTRACE_NONRETRY_DENY_LAB
+#define TTRACE_NONRETRY_DENY_LAB 0
+#endif
+#if TTRACE_NONRETRY_DENY_LAB
+#if TTRACE_FAIL_STOP_DENY || !TTRACE_GRACEFUL_LEASE || HTTP_EMPTY_ERROR_STRING
+#error "Nonretry lab denial needs an owned String and a graceful lease"
+#endif
+#ifndef API_ERROR_MAP_RVA
+#error "Nonretry lab denial needs a pinned API error mapper"
+#endif
+#ifndef API_ERROR_MAP_PREFIX_BYTES
+#error "Nonretry lab denial needs a pinned mapper entry prefix"
+#endif
+#endif
+#if !TTRACE_GRACEFUL_LEASE || !TTRACE_NONRETRY_DENY_LAB
+#error "The desktop guard needs the controller lease and the nonretry mapping"
+#endif
+#if TTRACE_GRACEFUL_LEASE && TTRACE_FAIL_STOP_DENY
+#error "A graceful lease cannot be combined with fail-stop denial"
+#endif
+#define LIMIT (16u * 1024u * 1024u)
+#define DEADLINE_MS 2000
+#ifndef TTRACE_EXPECTED_HASH
+#define TTRACE_EXPECTED_HASH "d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec"
+#endif
+static const char EXPECTED_HASH[] = TTRACE_EXPECTED_HASH;
+typedef void *(*HttpFn)(void *, void *, void *, void *);
+typedef void *(*WssFn)(void *, void *);
+#if TTRACE_NONRETRY_DENY_LAB
+typedef void *(*ApiErrorMapFn)(void *, void *);
+#endif
+#if !TTRACE_FAIL_STOP_DENY
+typedef void (*DropFn)(void *);
+#endif
+static HttpFn original_http;
+static WssFn original_wss;
+#if TTRACE_NONRETRY_DENY_LAB
+static ApiErrorMapFn original_api_error_map;
+static unsigned char *api_error_map_target;
+static unsigned char *http_target;
+static unsigned char *wss_target;
+static volatile LONG active_http_gates;
+static volatile LONG pending_http_sentinels;
+static volatile LONG active_mapper_gates;
+static const char DENY_SENTINEL[] =
+    "TTRACE_NATIVE_DENY_0167: Request blocked by Transpect local policy.";
+#endif
+#if !TTRACE_FAIL_STOP_DENY
+static DropFn drop_headers;
+#endif
+static volatile LONG sequence;
+static volatile LONG session_blocked;
+static char session_id[96];
+static wchar_t pipe_name[128];
+static HANDLE ready_event;
+#if TTRACE_GRACEFUL_LEASE
+/* The controller thread owns this mutex while it promises to answer. A free
+ * mutex with the stop event set is a controlled stop; a free or abandoned
+ * mutex without it is a lost controller. */
+static HANDLE lease_mutex;
+static HANDLE lease_stop_event;
+enum { LEASE_ACTIVE = 0, LEASE_STOPPED = 1, LEASE_LOST = 2 };
+#endif
+static _Thread_local char last_request_id[64];
+static _Thread_local char outcome_parent[64];
+static _Thread_local const char *outcome_action;
+static _Thread_local long long last_request_qpc;
+static _Thread_local long long outcome_qpc;
+
+static int readable(const void *pointer, size_t bytes) {
+    uintptr_t p = (uintptr_t)pointer, end = p + bytes;
+    if (p < 0x10000 || end < p || bytes > LIMIT) return 0;
+    while (p < end) {
+        MEMORY_BASIC_INFORMATION m;
+        if (!VirtualQuery((void *)p, &m, sizeof(m)) || m.State != MEM_COMMIT ||
+            (m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return 0;
+        uintptr_t next = (uintptr_t)m.BaseAddress + m.RegionSize;
+        if (next <= p) return 0;
+        p = next < end ? next : end;
+    }
+    return 1;
+}
+
+#if TTRACE_NONRETRY_DENY_LAB
+/* In the exact 0.167 binary, TransportError::Build is flattened as
+ * ApiError tag 10. Its owned String occupies words at +8/+16/+24. The
+ * InvalidPrompt variant is tag 25 with the same String layout. The string
+ * itself identifies this local denial; no shared request flag is needed. */
+static void *api_error_map_gate(void *result, void *error) {
+    InterlockedIncrement(&active_mapper_gates);
+    unsigned char *value = error;
+    int converted = 0;
+    if (readable(value, 32)) {
+        uintptr_t tag = 0, capacity = 0, pointer = 0, length = 0;
+        memcpy(&tag, value, 8);
+        if (tag == 10) {
+            memcpy(&capacity, value + 8, 8);
+            memcpy(&pointer, value + 16, 8);
+            memcpy(&length, value + 24, 8);
+            if (length == sizeof(DENY_SENTINEL) - 1 && capacity >= length &&
+                readable((void *)pointer, length) &&
+                !memcmp((void *)pointer, DENY_SENTINEL, length)) {
+                tag = 25;
+                memcpy(value, &tag, 8);
+                converted = 1;
+            }
+        }
+    }
+    void *returned = original_api_error_map(result, error);
+    if (converted) InterlockedDecrement(&pending_http_sentinels);
+    InterlockedDecrement(&active_mapper_gates);
+    return returned;
+}
+#endif
+
+static int same_binary(void) {
+    wchar_t path[32768];
+    if (!GetModuleFileNameW(NULL, path, 32768)) return 0;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                             NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    BCRYPT_ALG_HANDLE algorithm = NULL; BCRYPT_HASH_HANDLE hash = NULL;
+    DWORD size = 0, written = 0; unsigned char digest[32], block[65536];
+    int ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) == 0;
+    if (ok) ok = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, (PUCHAR)&size, sizeof(size), &written, 0) == 0;
+    unsigned char *object = ok ? HeapAlloc(GetProcessHeap(), 0, size) : NULL;
+    if (ok) ok = object && BCryptCreateHash(algorithm, &hash, object, size, NULL, 0, 0) == 0;
+    DWORD count;
+    while (ok) {
+        if (!ReadFile(file, block, sizeof(block), &count, NULL)) { ok = 0; break; }
+        if (!count) break;
+        if (BCryptHashData(hash, block, count, 0) != 0) ok = 0;
+    }
+    if (ok) ok = BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0;
+    char hex[65];
+    if (ok) {
+        for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", digest[i]);
+        ok = strcmp(hex, EXPECTED_HASH) == 0;
+    }
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (object) HeapFree(GetProcessHeap(), 0, object);
+    CloseHandle(file);
+    return ok;
+}
+
+static int io(HANDLE pipe, void *buffer, DWORD bytes, int writing, ULONGLONG deadline) {
+    DWORD offset = 0;
+    while (offset < bytes) {
+        if (GetTickCount64() >= deadline) return 0;
+        OVERLAPPED ov = {0}; ov.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (!ov.hEvent) return 0;
+        DWORD transferred = 0;
+        BOOL ok = writing ? WriteFile(pipe, (char *)buffer + offset, bytes - offset, &transferred, &ov)
+                          : ReadFile(pipe, (char *)buffer + offset, bytes - offset, &transferred, &ov);
+        if (!ok && GetLastError() == ERROR_IO_PENDING) {
+            ULONGLONG now = GetTickCount64();
+            DWORD remaining = now < deadline ? (DWORD)(deadline - now) : 0;
+            if (WaitForSingleObject(ov.hEvent, remaining) == WAIT_OBJECT_0)
+                ok = GetOverlappedResult(pipe, &ov, &transferred, FALSE);
+            else {
+                CancelIoEx(pipe, &ov);
+                GetOverlappedResult(pipe, &ov, &transferred, TRUE);
+                ok = FALSE;
+            }
+        }
+        CloseHandle(ov.hEvent);
+        if (!ok || !transferred) return 0;
+        offset += transferred;
+    }
+    return 1;
+}
+
+static int json_field(const char *json, const jsmntok_t *t, int n,
+                      const char *key, char *out, size_t capacity) {
+    if (n < 1 || t[0].type != JSMN_OBJECT) return 0;
+    int found = 0;
+    for (int i = 1; i + 1 < n; i++) {
+        if (t[i].parent != 0 || t[i].type != JSMN_STRING) continue;
+        int len = t[i].end - t[i].start;
+        if ((size_t)len != strlen(key) || memcmp(json + t[i].start, key, len)) continue;
+        if (found++) return 0;
+        if (t[i + 1].type != JSMN_STRING) return 0;
+        len = t[i + 1].end - t[i + 1].start;
+        if (len < 0 || (size_t)len >= capacity) return 0;
+        memcpy(out, json + t[i + 1].start, len); out[len] = 0;
+    }
+    return found == 1;
+}
+
+static int whitespace(char c) { return c==' ' || c=='\t' || c=='\r' || c=='\n'; }
+/* The decision contract is exactly six string fields. jsmn tokenization alone
+ * does not reject missing commas, multiple roots or duplicate object keys. */
+static int decision_shape(const char *json, size_t bytes, const jsmntok_t *t, int n) {
+    if (n != 13 || t[0].type != JSMN_OBJECT) return 0;
+    size_t p=0;
+    while(p<bytes && whitespace(json[p]))p++;
+    if(p!=(size_t)t[0].start || json[p++]!='{')return 0;
+    for(int i=1;i<n;i+=2) {
+        if(t[i].type!=JSMN_STRING || t[i].parent!=0 ||
+           t[i+1].type!=JSMN_STRING || t[i+1].parent!=i)return 0;
+        while(p<bytes && whitespace(json[p]))p++;
+        if(p!=(size_t)t[i].start-1 || json[p]!='"')return 0;
+        p=(size_t)t[i].end+1;
+        while(p<bytes && whitespace(json[p]))p++;
+        if(p>=bytes || json[p++]!=':')return 0;
+        while(p<bytes && whitespace(json[p]))p++;
+        if(p!=(size_t)t[i+1].start-1 || json[p]!='"')return 0;
+        p=(size_t)t[i+1].end+1;
+        while(p<bytes && whitespace(json[p]))p++;
+        if(i+2<n && (p>=bytes || json[p++]!=','))return 0;
+    }
+    if(p>=bytes || json[p++]!='}' || p!=(size_t)t[0].end)return 0;
+    while(p<bytes && whitespace(json[p]))p++;
+    return p==bytes;
+}
+
+static size_t quote(char *out, const unsigned char *data, size_t bytes) {
+    static const char hex[] = "0123456789abcdef";
+    size_t n = 0; out[n++] = '"';
+    for (size_t i = 0; i < bytes; i++) {
+        unsigned char c = data[i];
+        if (c == '"' || c == '\\') { out[n++] = '\\'; out[n++] = c; }
+        else if (c < 32) {
+            out[n++] = '\\'; out[n++] = 'u'; out[n++] = '0'; out[n++] = '0';
+            out[n++] = hex[c >> 4]; out[n++] = hex[c & 15];
+        } else out[n++] = c;
+    }
+    out[n++] = '"'; out[n] = 0; return n;
+}
+
+/* Returns 0 allow, 1 block_request, 2 block_session, 3 terminate_process.
+ * Transport/protocol failures always return block_request, never terminate. */
+static int policy(const char *kind, const char *protocol, const void *data, size_t bytes) {
+    DWORD id = (DWORD)InterlockedIncrement(&sequence);
+    char request_id[64]; snprintf(request_id, sizeof(request_id), "%lu-%lu", GetCurrentProcessId(), id);
+    if(!strcmp(kind,"model.request")) {
+        strcpy(last_request_id,request_id);outcome_parent[0]=0;outcome_action=NULL;
+        LARGE_INTEGER observed;QueryPerformanceCounter(&observed);last_request_qpc=observed.QuadPart;
+    }
+    if (!strcmp(protocol,"control") ? 0 : InterlockedCompareExchange(&session_blocked, 0, 0)) return 2;
+    if (bytes > LIMIT || (bytes && !readable(data, bytes))) return 1;
+    char *request = HeapAlloc(GetProcessHeap(), 0, bytes * 6 + 1024);
+    if (!request) return 1;
+    LARGE_INTEGER tick,frequency;QueryPerformanceCounter(&tick);QueryPerformanceFrequency(&frequency);
+    int n = snprintf(request, 1024,
+        "{\"schema\":\"transpect.guard.request/1.0\",\"request_id\":\"%s\","
+        "\"guard_session_id\":\"%s\",\"pid\":%lu,\"tid\":%lu,\"kind\":\"%s\","
+        "\"protocol\":\"%s\",\"destination\":null,\"completeness\":\"complete\","
+        "\"captured_qpc\":%lld,\"qpc_frequency\":%lld,\"outcome_for_request_id\":\"%s\",\"outcome_action\":\"%s\",\"outcome_captured_qpc\":%lld,\"payload_utf8\":",
+        request_id, session_id, GetCurrentProcessId(), GetCurrentThreadId(), kind, protocol,
+        !strcmp(kind,"model.request")?last_request_qpc:tick.QuadPart,
+        frequency.QuadPart,outcome_parent,outcome_action?outcome_action:"none",outcome_qpc);
+    n += (int)quote(request + n, data ? data : "", bytes); request[n++] = '}'; request[n] = 0;
+    ULONGLONG deadline = GetTickCount64() + DEADLINE_MS;
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    do {
+        pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+        if (pipe != INVALID_HANDLE_VALUE || GetLastError() != ERROR_PIPE_BUSY) break;
+        ULONGLONG now = GetTickCount64();
+        if (now >= deadline || !WaitNamedPipeW(pipe_name, (DWORD)(deadline - now))) break;
+    } while (GetTickCount64() < deadline);
+    int action = 1;
+    if (pipe != INVALID_HANDLE_VALUE) {
+        uint32_t length = (uint32_t)n, reply_length = 0; char reply[8193];
+        if (io(pipe, &length, 4, 1, deadline) && io(pipe, request, length, 1, deadline) &&
+            io(pipe, &reply_length, 4, 0, deadline) && reply_length && reply_length <= 8192 &&
+            io(pipe, reply, reply_length, 0, deadline)) {
+            reply[reply_length] = 0;
+            jsmn_parser parser; jsmntok_t tokens[128]; jsmn_init(&parser);
+            int count = jsmn_parse(&parser, reply, reply_length, tokens, 128);
+            char schema[80], matched_id[64], decision[32], requested_action[32], reason[1024], version[128];
+            if (GetTickCount64() < deadline && decision_shape(reply, reply_length, tokens, count) &&
+                json_field(reply, tokens, count, "reason", reason, sizeof(reason)) &&
+                json_field(reply, tokens, count, "policy_version", version, sizeof(version)) &&
+                json_field(reply, tokens, count, "schema", schema, sizeof(schema)) &&
+                !strcmp(schema, "transpect.guard.decision/1.0") &&
+                json_field(reply, tokens, count, "request_id", matched_id, sizeof(matched_id)) && !strcmp(matched_id, request_id) &&
+                json_field(reply, tokens, count, "decision", decision, sizeof(decision)) &&
+                json_field(reply, tokens, count, "action", requested_action, sizeof(requested_action))) {
+                if (!strcmp(decision, "allow") && !strcmp(requested_action, "none")) action = 0;
+                else if (!strcmp(decision, "deny")) {
+                    if (!strcmp(requested_action, "block_request")) action = 1;
+                    else if (!strcmp(requested_action, "block_session")) action = 2;
+                    else if (!strcmp(requested_action, "terminate_process")) action = 3;
+                }
+            }
+        }
+        CloseHandle(pipe);
+    }
+    HeapFree(GetProcessHeap(), 0, request);
+    if (action == 2) InterlockedExchange(&session_blocked, 1);
+    return action;
+}
+
+typedef struct { char parent[64]; int action; long long qpc; } Outcome;
+static DWORD WINAPI send_outcome(void *parameter) {
+    Outcome *result=parameter;strcpy(outcome_parent,result->parent);
+    outcome_qpc=result->qpc;
+    outcome_action=result->action==2?"block_session":"block_request";
+    policy("native.outcome","control",NULL,0);
+    outcome_parent[0]=0;outcome_action=NULL;outcome_qpc=0;
+    HeapFree(GetProcessHeap(),0,result);return 0;
+}
+static void report_outcome(int action) {
+    Outcome *result=HeapAlloc(GetProcessHeap(),0,sizeof(Outcome));
+    if(!result)return;
+    strcpy(result->parent,last_request_id);result->action=action;
+    result->qpc=last_request_qpc;
+    if(!QueueUserWorkItem(send_outcome,result,WT_EXECUTEDEFAULT))HeapFree(GetProcessHeap(),0,result);
+}
+
+#if TTRACE_GRACEFUL_LEASE
+static int lease_state(void) {
+    if (!lease_mutex) return LEASE_LOST;
+    DWORD state = WaitForSingleObject(lease_mutex, 0);
+    if (state == WAIT_TIMEOUT) return LEASE_ACTIVE;
+    if (state != WAIT_OBJECT_0 && state != WAIT_ABANDONED_0) return LEASE_LOST;
+    /* Held only for this check, so a new controller can take it at once. */
+    ReleaseMutex(lease_mutex);
+    if (lease_stop_event && WaitForSingleObject(lease_stop_event, 0) == WAIT_OBJECT_0)
+        return LEASE_STOPPED;
+    return LEASE_LOST;
+}
+#endif
+
+#if TTRACE_FAIL_STOP_DENY
+/* The current lab has capture evidence, but no verified Rust deny-result ABI.
+ * A denied request must not return to the caller or invoke the original sender. */
+static void fail_stop_deny(void) {
+    TerminateProcess(GetCurrentProcess(), 76);
+    ExitProcess(76);
+    for (;;) Sleep(INFINITE);
+}
+#endif
+
+static void *http_gate_inner(void *result, void *request, void *headers, void *body) {
+    int lease = lease_state();
+    if (lease == LEASE_STOPPED) return original_http(result, request, headers, body);
+    uintptr_t *b = body;
+    int action = 1; /* LEASE_LOST: no controller to ask, deny. */
+    if (lease == LEASE_ACTIVE && readable(body, 65))
+        action = policy("model.request", "http", (void *)b[1], b[2]);
+    if (!action) return original_http(result, request, headers, body);
+#if TTRACE_FAIL_STOP_DENY
+    fail_stop_deny();
+#else
+    if(action==3){TerminateProcess(GetCurrentProcess(),76);return result;}
+#if TTRACE_NONRETRY_DENY_LAB
+    size_t length = sizeof(DENY_SENTINEL) - 1;
+    char *error = HeapAlloc(GetProcessHeap(), 0, length + 1);
+    if (!error) { length = 0; error = (char *)1; }
+    else memcpy(error, DENY_SENTINEL, length + 1);
+    drop_headers(headers);
+    uintptr_t *out = result;
+    out[0] = HTTP_DENIED_TAG;
+    out[1] = length ? length + 1 : 0;
+    out[2] = (uintptr_t)error;
+    out[3] = length;
+    if (length) InterlockedIncrement(&pending_http_sentinels);
+#elif HTTP_EMPTY_ERROR_STRING
+    /* Fixed desktop ABI: Rust's empty String representation owns no buffer.
+     * Never pass a Win32 HeapAlloc block to Rust's String destructor. */
+    drop_headers(headers);
+    uintptr_t *out = result;
+    out[0] = HTTP_DENIED_TAG; out[1] = 0; out[2] = 1; out[3] = 0;
+#else
+    const char *reason = "Transpect: request denied by local policy";
+    size_t length = strlen(reason);
+    char *error = HeapAlloc(GetProcessHeap(), 0, length + 1);
+    if (!error) { /* Valid empty String, avoiding an unverified allocation failure return. */
+        length = 0; error = (char *)1;
+    } else memcpy(error, reason, length + 1);
+    drop_headers(headers);
+    uintptr_t *out = result;
+    out[0] = HTTP_DENIED_TAG; out[1] = length ? length + 1 : 0; out[2] = (uintptr_t)error; out[3] = length;
+#endif
+    report_outcome(action);
+#endif
+    return result;
+}
+
+#if TTRACE_NONRETRY_DENY_LAB
+static void *http_gate(void *result, void *request, void *headers, void *body) {
+    InterlockedIncrement(&active_http_gates);
+    void *returned = http_gate_inner(result, request, headers, body);
+    InterlockedDecrement(&active_http_gates);
+    return returned;
+}
+#else
+#define http_gate http_gate_inner
+#endif
+
+static void *wss_gate(void *result, void *request) {
+    int lease = lease_state();
+    if (lease == LEASE_STOPPED) return original_wss(result, request);
+    void *returned = original_wss(result, request);
+#if TTRACE_FAIL_STOP_DENY
+    if (!readable(result, 32)) fail_stop_deny();
+#endif
+    uintptr_t *out = result;
+    if (out[0] != WSS_SUCCESS_TAG) {
+#if TTRACE_FAIL_STOP_DENY
+        /* An unexpected result tag might be a changed success layout. */
+        fail_stop_deny();
+#else
+        return returned;
+#endif
+    }
+    int action = lease == LEASE_ACTIVE
+        ? policy("model.request", "wss", (void *)out[2], out[3]) : 1;
+    if (!action) return returned;
+#if TTRACE_FAIL_STOP_DENY
+    fail_stop_deny();
+#else
+    if(action==3){TerminateProcess(GetCurrentProcess(),76);return returned;}
+    const char *reason = "Transpect: request denied by local policy";
+    size_t length = strlen(reason);
+    if (out[1] <= length || !readable((void *)out[2], length + 1)) {
+        /* Keep the owned buffer/capacity, represent a valid empty String. */
+        out[3] = 0;
+    } else {
+        memcpy((void *)out[2], reason, length + 1); out[3] = length;
+    }
+    out[0] = WSS_DENIED_TAG; /* ApiError::Stream(String), fixed-build layout. */
+    report_outcome(action);
+#endif
+    return returned;
+}
+
+static DWORD WINAPI initialize(LPVOID unused) {
+    (void)unused;
+    FILETIME created, exited, kernel, user;
+    if (!same_binary() || !GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return 1;
+    ULARGE_INTEGER creation; creation.LowPart = created.dwLowDateTime; creation.HighPart = created.dwHighDateTime;
+    snprintf(session_id, sizeof(session_id), "%lu-%llu", GetCurrentProcessId(), (unsigned long long)creation.QuadPart);
+    swprintf(pipe_name, 128, L"\\\\.\\pipe\\ttrace-guard-%lu", GetCurrentProcessId());
+#if TTRACE_GRACEFUL_LEASE
+    wchar_t lease_name[160], stop_name[160];
+    swprintf(lease_name, 160, L"Local\\ttrace-guard-lease-%hs", session_id);
+    swprintf(stop_name, 160, L"Local\\ttrace-guard-stop-%hs", session_id);
+    lease_mutex = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, lease_name);
+    if (!lease_mutex) return 7;
+    DWORD lease_state = WaitForSingleObject(lease_mutex, 0);
+    if (lease_state == WAIT_OBJECT_0 || lease_state == WAIT_ABANDONED_0)
+        ReleaseMutex(lease_mutex);
+    if (lease_state != WAIT_TIMEOUT)
+        return 7; /* The exact controller thread must own the lease already. */
+    /* Manual reset: a controller sets it before a controlled release; a
+     * reconnecting controller resets it after taking the lease. */
+    lease_stop_event = CreateEventW(NULL, TRUE, FALSE, stop_name);
+    if (!lease_stop_event || GetLastError() == ERROR_ALREADY_EXISTS) return 8;
+#endif
+    /* No hooks become active before a compatible local engine responds. */
+    if (policy("native.initialize", "control", NULL, 0) != 0) return 2;
+    unsigned char *base = (unsigned char *)GetModuleHandleW(NULL);
+    const unsigned char http_prefix[] = HTTP_ENTRY_PREFIX_BYTES;
+    const unsigned char wss_prefix[] = WSS_ENTRY_PREFIX_BYTES;
+    if (memcmp(base + HTTP_RVA, http_prefix, sizeof(http_prefix)) ||
+        memcmp(base + WSS_RVA, wss_prefix, sizeof(wss_prefix))) return 3;
+#if TTRACE_NONRETRY_DENY_LAB
+    const unsigned char api_error_map_prefix[] = API_ERROR_MAP_PREFIX_BYTES;
+    if (memcmp(base + API_ERROR_MAP_RVA, api_error_map_prefix,
+               sizeof(api_error_map_prefix))) return 3;
+    http_target = base + HTTP_RVA;
+    wss_target = base + WSS_RVA;
+    api_error_map_target = base + API_ERROR_MAP_RVA;
+#endif
+#if !TTRACE_FAIL_STOP_DENY && defined(DROP_HEADERS_PREFIX_BYTES)
+    const unsigned char drop_prefix[] = DROP_HEADERS_PREFIX_BYTES;
+    if (memcmp(base + DROP_HEADERS_RVA, drop_prefix, sizeof(drop_prefix))) return 3;
+#endif
+#if !TTRACE_FAIL_STOP_DENY
+    drop_headers = (DropFn)(base + DROP_HEADERS_RVA);
+#endif
+    if (MH_Initialize() != MH_OK) return 4;
+    if (MH_CreateHook(base + HTTP_RVA, http_gate, (LPVOID *)&original_http) != MH_OK ||
+        MH_CreateHook(base + WSS_RVA, wss_gate, (LPVOID *)&original_wss) != MH_OK
+#if TTRACE_NONRETRY_DENY_LAB
+        || MH_CreateHook(base + API_ERROR_MAP_RVA, api_error_map_gate,
+                         (LPVOID *)&original_api_error_map) != MH_OK
+#endif
+        ) {
+        MH_Uninitialize(); return 5;
+    }
+    if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) { MH_Uninitialize(); return 6; }
+    wchar_t ready_name[160];swprintf(ready_name,160,L"Local\\ttrace-guard-ready-%hs",session_id);
+    ready_event=CreateEventW(NULL,TRUE,TRUE,ready_name);
+    policy("native.ready", "control", NULL, 0);
+    return 0;
+}
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(instance);
+        HANDLE thread = CreateThread(NULL, 0, initialize, NULL, 0, NULL);
+        if (thread) CloseHandle(thread);
+    }
+    /* Resident hooks: policy-service loss cannot revert to unguarded sending. */
+    return TRUE;
+}
