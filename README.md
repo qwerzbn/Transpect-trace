@@ -38,15 +38,18 @@ Codex 客户端（codex.exe app-server）
 
 ## 快速开始
 
-环境：Windows x64、已安装 Codex 桌面端 `26.1103.3517.0`、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Git Bash。在仓库根目录执行：
+环境：Windows x64、已安装 Codex 桌面端 `26.1103.3517.0`、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Git Bash。在仓库根目录的 Git Bash 中执行：
 
 ```bash
 ./start.sh
 ```
 
-首次运行会自动安装依赖并在本机编译 Native DLL，约 1 分钟；之后秒级启动。防护启动后持续扫描当前用户的 Codex 后端：
-- 已在运行的 Codex 立即接入；
-- 之后启动或重启的 Codex 自动接入，从进程创建到受保护约 1 秒。
+首次运行会按锁定的依赖安装并在本机编译 Native DLL，实测约 1 分钟；后续启动复用构建产物。默认在当前窗口持续运行，可另开一个 Git Bash 窗口执行 `./start.sh status` 查看状态。防护每 250 ms 扫描当前用户的 `codex.exe app-server`：
+- 已在运行的进程自动接入，实测约 765 ms；
+- 之后启动或重启的进程自动接入，实测从进程创建到受保护约 1.1 秒；
+- 所有后端哈希与版本固定文件匹配的进程都会被接管，包括独立启动的同版本 `app-server`；版本不匹配的进程显示 `UNSUPPORTED_VERSION`。
+
+在 `status` 输出中确认目标进程为 `PROTECTED` 后再发送需要防护的请求。新进程创建与接入之间仍有时间窗口；WFP 启动门闩尚未实现。
 
 每次判定打印一行：
 
@@ -58,10 +61,13 @@ Codex 客户端（codex.exe app-server）
 | 命令 | 作用 |
 |---|---|
 | `./start.sh` | 在当前窗口启动防护，Ctrl+C 或关闭窗口即停止 |
-| `./start.sh install` | 登录时自动启动，并立即在后台启动 |
 | `./start.sh status` | 查看防护和各 Codex 后端的状态与计数 |
-| `./start.sh stop` | 停止后台运行的防护 |
+| `./start.sh stop` | 停止正在运行的防护 |
+| `./start.sh build` | 只构建已安装且受支持版本的 Native DLL |
+| `./start.sh install` | 注册登录自启计划任务，并立即在后台启动 |
 | `./start.sh uninstall` | 取消登录自启并停止 |
+
+登录自启尚未完成手工验收。需要使用时，依次执行 `./start.sh install`、`./start.sh status`、`./start.sh uninstall` 验证；计划任务注册可能受本机权限策略限制。
 
 - **停止行为**：通过 Ctrl+C、关闭窗口或 `stop` 停止后，已接入的 Codex 恢复直接发送。防护进程被强制结束或崩溃时，Codex 的请求一律被拒，直到防护重新启动。
 - **重新接管**：防护重启后会接管已注入的 Codex 进程，无需重启 Codex。
