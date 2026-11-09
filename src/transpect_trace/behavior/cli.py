@@ -1,4 +1,5 @@
 import json
+from enum import Enum
 from pathlib import Path
 
 import typer
@@ -6,19 +7,32 @@ import typer
 app = typer.Typer(no_args_is_help=True, help='Fixed Codex system behavior evidence; separate from Native request protection.')
 
 
+class BehaviorChannel(str, Enum):
+    cli = 'cli'
+    desktop = 'desktop'
+
+
 @app.command('attach')
 def attach(pid: int = typer.Option(..., min=1),
            output: Path = typer.Option(...),
            collector: Path = typer.Option(Path('build/behavior/etw.exe'), exists=True),
            expected_creation_filetime: int | None = typer.Option(None, min=1),
-           duration: int = typer.Option(30, min=1, max=300)):
-    from transpect_trace.guard.native import process_identity
+           duration: int = typer.Option(30, min=1, max=300),
+           channel: BehaviorChannel = typer.Option(BehaviorChannel.cli)):
     from .collector import CodexBehaviorCollector
     from .report import build_report
-    subject = process_identity(pid)
+    if channel == BehaviorChannel.desktop:
+        from .desktop_identity import collect_desktop_observation_identity
+        subject = collect_desktop_observation_identity(pid)
+        recheck = lambda: collect_desktop_observation_identity(pid)
+    else:
+        from transpect_trace.guard.native import process_identity
+        subject = process_identity(pid)
+        recheck = None
     if expected_creation_filetime is not None and subject['creation_filetime'] != expected_creation_filetime:
         raise typer.BadParameter('Process generation changed before collector attachment')
-    session = CodexBehaviorCollector(subject, collector, output, duration=duration)
+    session = CodexBehaviorCollector(subject, collector, output, duration=duration,
+                                     identity_recheck=recheck)
     session.start(); session.wait()
     report = build_report(output)
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')

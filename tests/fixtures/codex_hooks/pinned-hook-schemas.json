@@ -2,6 +2,151 @@
   "backend_version": "codex-cli 0.166.0-alpha.6",
   "schema": "transpect.codex.hook-schemas/1.0",
   "schemas": {
+    "post-tool-use.command.input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "NullableString": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "hook_event_name": {
+          "const": "PostToolUse",
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "dontAsk",
+            "bypassPermissions"
+          ],
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_response": true,
+        "tool_use_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "$ref": "#/definitions/NullableString"
+        },
+        "turn_id": {
+          "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "hook_event_name",
+        "model",
+        "permission_mode",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_response",
+        "tool_use_id",
+        "transcript_path",
+        "turn_id"
+      ],
+      "title": "post-tool-use.command.input",
+      "type": "object"
+    },
+    "post-tool-use.command.output": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BlockDecisionWire": {
+          "enum": [
+            "block"
+          ],
+          "type": "string"
+        },
+        "PostToolUseHookSpecificOutputWire": {
+          "additionalProperties": false,
+          "properties": {
+            "additionalContext": {
+              "default": null,
+              "type": "string"
+            },
+            "hookEventName": {
+              "const": "PostToolUse",
+              "type": "string"
+            },
+            "updatedMCPToolOutput": {
+              "default": null
+            }
+          },
+          "required": [
+            "hookEventName"
+          ],
+          "type": "object"
+        }
+      },
+      "properties": {
+        "continue": {
+          "default": true,
+          "type": "boolean"
+        },
+        "decision": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BlockDecisionWire"
+            }
+          ],
+          "default": null
+        },
+        "hookSpecificOutput": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PostToolUseHookSpecificOutputWire"
+            }
+          ],
+          "default": null
+        },
+        "reason": {
+          "default": null,
+          "type": "string"
+        },
+        "stopReason": {
+          "default": null,
+          "type": "string"
+        },
+        "suppressOutput": {
+          "default": false,
+          "type": "boolean"
+        },
+        "systemMessage": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "title": "post-tool-use.command.output",
+      "type": "object"
+    },
     "pre-tool-use.command.input": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,

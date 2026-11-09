@@ -10,6 +10,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -105,6 +106,15 @@ class EncryptedRequestArchive:
         if len(key) != 32:
             raise ValueError("invalid archive key")
         return key
+
+    def keyed_digest(self, data: bytes) -> str:
+        """HMAC of `data` under a key derived from the archive key.
+
+        Collection records carry this instead of a plain digest, so a short
+        prompt cannot be confirmed by hashing guesses offline.
+        """
+        subkey = hmac.new(self.key, b"transpect.codex-collection/1.0", hashlib.sha256).digest()
+        return hmac.new(subkey, data, hashlib.sha256).hexdigest()
 
     def save(self, kind: str, payload: bytes, *, now: datetime | None = None) -> ArchiveReceipt:
         if kind not in {"model_request", "attachment"}:

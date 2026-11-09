@@ -257,21 +257,110 @@ def _cn_id_valid(value: str) -> bool:
     return checks[sum(int(digit) * weight for digit, weight in zip(value[:17], weights)) % 11] == value[-1].upper()
 
 
+def _credential_body(value: str) -> bool:
+    """A real credential body mixes letters and digits and is not a repeat."""
+    token = re.split(r"\s+", value.strip())[-1]
+    body = token.split("-", 1)[-1] if token.startswith(("sk-", "xox")) else token
+    return (any(char.isalpha() for char in body) and any(char.isdigit() for char in body)
+            and _entropy(body) >= 3.0)
+
+
+_ASSIGNED_VALUE = re.compile(r"[=:]\s*['\"]?([A-Za-z0-9+/._=-]{12,})$")
+_CODE_REFERENCE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[A-Za-z_]+")
+
+
+def _assigned_value(match_text: str) -> bool:
+    """Reject a right-hand side that is code, not a literal.
+
+    In tool output, which is mostly source, `token = self.config.api_token`
+    and `password=getpass_prompt` match the assignment shape. A dotted
+    reference or a bare identifier with no digit is a name, not a secret.
+    Measured on this machine's tool history these two shapes were 741 of the
+    rule's hits; a letters-only literal password is the accepted loss.
+    """
+    match = _ASSIGNED_VALUE.search(match_text)
+    return bool(match) and _CODE_REFERENCE.fullmatch(match.group(1)) is None
+
+
+_PLACEHOLDER_PASSWORDS = frozenset((
+    "password", "passwd", "pass", "secret", "changeme", "example", "your_password",
+    "yourpassword", "mypassword", "pwd", "123456", "dbpass", "db_password"))
+
+
+def _url_password(value: str) -> bool:
+    match = re.search(r"://[^\s:/@'\"]{1,64}:([^\s@/'\"]{6,128})@", value)
+    password = match.group(1) if match else ""
+    return (password.casefold() not in _PLACEHOLDER_PASSWORDS
+            and not password.startswith(("$", "%", "{", "<")))
+
+
+# The most frequent Chinese surnames, single and compound. A labeled name must
+# start with one; that keeps `客户端`, `员工号` style product words out.
+_CN_SURNAMES = frozenset(
+    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈"
+    "姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤"
+    "常温康施文牛樊葛邢安齐易乔伍庞颜倪庄聂章鲁岳翟殷詹申欧耿关兰焦俞左柳甘祝包宁尚符舒阮柯纪梅童凌毕单季"
+    "裴霍涂成苗谷盛曲翁冉骆蓝路游辛靳管柴蒙鲍华喻祁蒲房滕屈饶解牟艾尤阳时穆农司卓古吉缪简车项连芦麦褚娄"
+    "窦戚岑景党宫费卜冷晏席卫米柏宗瞿桂全佟应臧闵苟邬边卞姬师和仇栾隋商刁沙荣巫寇桑郎甄丛仲虞敖巩明佘池"
+    "查麻苑迟邝")
+_CN_COMPOUND_SURNAMES = ("欧阳", "司马", "诸葛", "上官", "东方", "皇甫", "尉迟", "公孙", "慕容", "令狐", "夏侯", "长孙")
+
+
+_CN_NAME_LABEL = r"(?:姓名|名字|客户|联系人|收件人|收货人|患者|病人|员工|申请人|持卡人|户名|乘客|学生|业主)"
+
+
+def _cn_name(value: str) -> bool:
+    match = re.fullmatch(_CN_NAME_LABEL + r"\s*[:：为是]?\s*([㐀-鿿]{2,4})", value)
+    name = match.group(1) if match else ""
+    return bool(name) and (name[0] in _CN_SURNAMES or name.startswith(_CN_COMPOUND_SURNAMES))
+
+
 _BENIGN = re.compile(r"^(?:[*x•]{3,}|\$\{[^}]+\}|<[^>]+>|placeholder|redacted)$", re.I)
 _RULES = (
     ("AWS_ACCESS_KEY", "SECRET", re.compile(r"\bAKIA[0-9A-Z]{16}\b"), 0.95, (), None),
-    ("PRIVATE_KEY", "SECRET", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"), 0.98, (), None),
+    ("PRIVATE_KEY", "SECRET", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?-----"), 0.98, (), None),
+    # Vendor credentials carry a fixed, documented prefix. A prefix plus the
+    # published length is near-certain on its own, so these deny without any
+    # surrounding keyword. Before these rules a GitHub or OpenAI token only
+    # raised the advisory `ENTROPY_TOKEN` and the gate let it through.
+    ("GITHUB_TOKEN", "SECRET", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})\b"), 0.97, (), None),
+    ("OPENAI_API_KEY", "SECRET", re.compile(r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}"), 0.96, (), _credential_body),
+    ("ANTHROPIC_API_KEY", "SECRET", re.compile(r"\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{40,}"), 0.97, (), None),
+    # Legacy OpenAI keys and the `sk-` + 32 hex form several Chinese model
+    # vendors (DeepSeek among them) issue. Both still need a credential-shaped body.
+    ("SK_API_KEY", "SECRET", re.compile(r"\bsk-(?:[A-Za-z0-9]{48}|[a-f0-9]{32})\b"), 0.92, (), _credential_body),
+    ("SLACK_TOKEN", "SECRET", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), 0.94, (), _credential_body),
+    ("GOOGLE_API_KEY", "SECRET", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), 0.94, (), None),
+    ("ALIYUN_ACCESS_KEY", "SECRET", re.compile(r"\bLTAI[A-Za-z0-9]{12,20}\b"), 0.92, (), _credential_body),
+    ("TENCENT_SECRET_ID", "SECRET", re.compile(r"\bAKID[A-Za-z0-9]{32}\b"), 0.92, (), _credential_body),
+    ("STRIPE_SECRET_KEY", "SECRET", re.compile(r"\b[rs]k_live_[A-Za-z0-9]{24,}\b"), 0.96, (), None),
+    ("JWT", "SECRET", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), 0.85, (), None),
+    ("BEARER_TOKEN", "SECRET", re.compile(r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{20,}=*)"), 0.88, (), _credential_body),
+    # `scheme://user:password@host` -- the password is group 1, so a templated
+    # `${DB_PASS}` or `<password>` is dropped by the benign-value check.
+    ("URL_PASSWORD", "SECRET", re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]{1,20}://[^\s:/@'\"]{1,64}:([^\s@/'\"]{6,128})@[^\s/'\"]+"), 0.88, (), _url_password),
     # The keyword may sit inside a longer identifier: `aws_secret_access_key=`
     # and `GITHUB_TOKEN=` are the common real spellings, and anchoring the
     # keyword directly against the delimiter missed both.
-    ("ASSIGNED_SECRET", "SECRET", re.compile(r"(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.-]{0,40}(?:api[_-]?key|secret|access[_-]?token|client[_-]?secret|token|password|passwd|credential)[A-Za-z0-9_.-]{0,40}\s*[=:]\s*['\"]?([A-Za-z0-9+/._=-]{12,})"), 0.65, ("secret", "token", "password", "key"), None),
+    ("ASSIGNED_SECRET", "SECRET", re.compile(r"(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.-]{0,40}(?:api[_-]?key|secret|access[_-]?token|client[_-]?secret|token|password|passwd|credential)[A-Za-z0-9_.-]{0,40}\s*[=:]\s*['\"]?([A-Za-z0-9+/._=-]{12,})"), 0.65, ("secret", "token", "password", "key"), _assigned_value),
     ("US_SSN", "PII", re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)"), 0.65, ("ssn", "social security"), None),
-    ("CN_ID", "PII", re.compile(r"(?<!\d)\d{17}[\dXx](?![A-Za-z0-9])"), 0.75, ("身份证", "身份", "证件"), _cn_id_valid),
-    ("PAYMENT_CARD", "PII", re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)"), 0.88, ("card", "visa", "信用卡", "银行卡"), _payment_card),
+    # `(?<!\d\.)`: the fractional digits of a float (`"score": 0.4111111111111111`)
+    # pass Luhn and the issuer check about as often as any digit run. They were
+    # most card and ID hits in this machine's tool output.
+    ("CN_ID", "PII", re.compile(r"(?<!\d)(?<!\d\.)\d{17}[\dXx](?![A-Za-z0-9])"), 0.75, ("身份证", "身份", "证件"), _cn_id_valid),
+    ("PAYMENT_CARD", "PII", re.compile(r"(?<!\d)(?<!\d\.)(?:\d[ -]?){13,19}(?!\d)"), 0.88, ("card", "visa", "信用卡", "银行卡", "卡号"), _payment_card),
     ("CN_PASSPORT", "PII", re.compile(r"(?<![A-Za-z0-9])[EG]\d{8}(?![A-Za-z0-9])"), 0.60,
      ("护照", "证件", "签证", "passport"), None),
-    ("CN_PHONE", "PII", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), 0.45, ("phone", "mobile", "电话", "手机"), None),
-    ("EMAIL", "PII", re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), 0.35, ("email", "邮箱"), None),
+    ("CN_PHONE", "PII", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), 0.45, ("phone", "mobile", "tel", "电话", "手机", "联系"), None),
+    # A labeled Chinese personal name. The label is part of the pattern, so the
+    # rule needs no extra context; alone it stays below the REVIEW threshold and
+    # only combines with another identifier (noisy-OR) into a denial.
+    ("CN_NAME", "PII", re.compile(_CN_NAME_LABEL + r"\s*[:：为是]?\s*([㐀-鿿]{2,4})"), 0.45, (), _cn_name),
+    ("CN_ADDRESS", "PII", re.compile(r"(?:[㐀-鿿]{2,8}(?:省|自治区))?[㐀-鿿]{2,8}市[㐀-鿿]{1,8}(?:区|县|市|旗)[㐀-鿿A-Za-z0-9]{0,30}?\d+\s*(?:号|弄|栋|幢|室|单元)"), 0.45, (), None),
+    # A boundary prevents the regex engine from retrying at every character
+    # inside a long username-like run with no '@' (quadratic backtracking).
+    ("EMAIL", "PII", re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+"),
+     0.35, ("email", "邮箱"), None),
 )
 _ENTROPY_TOKENS = re.compile(r"[A-Za-z0-9+/=_-]{24,256}")
 _HEX = re.compile(r"(?<![0-9a-fA-F])(?:[0-9a-fA-F]{2}){16,}(?![0-9a-fA-F])")
@@ -282,8 +371,31 @@ _CODE_SIGNALS = tuple(re.compile(expr) for expr in (
 ))
 
 
-def _canonical_forms(text: str, deadline: float) -> list[str]:
-    forms = [text]
+# Zero-width and bidi/format characters render as nothing, so `AKIA<ZWSP>...`
+# looks like a key to a reader and to the model but not to a regex.
+_INVISIBLE = re.compile("[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
+# Shell and JSON escaping that splits a keyword from its value: `\"`, PowerShell
+# backtick escapes and cmd carets, plus the quotes themselves, so
+# `password=\"value\"` and `"pass""word"=value` reach the rules intact.
+_ESCAPES = re.compile(r"""\\(?=["'\\])|`(?=\S)|\^(?=\S)|["']""")
+
+
+def _normalized_form(text: str) -> str | None:
+    """One extra form with width folding, invisibles and shell escapes removed.
+
+    It is a *rewrite* of the same bytes, not a decoding, so findings on it keep
+    their plain rule IDs and get no decoded bonus.
+    """
+    form = _ESCAPES.sub("", _INVISIBLE.sub("", unicodedata.normalize("NFKC", text)))
+    return form if form != text else None
+
+
+def _canonical_forms(text: str, deadline: float) -> list[tuple[str, bool]]:
+    """Return (form, decoded) pairs: the text, its normalized rewrite, decodings."""
+    forms = [(text, False)]
+    normalized = _normalized_form(text)
+    if normalized is not None:
+        forms.append((normalized, False))
     consumed = 0
     for expression, hex_mode in ((_HEX, True), (_BASE64, False)):
         for number, match in enumerate(expression.finditer(text)):
@@ -302,13 +414,13 @@ def _canonical_forms(text: str, deadline: float) -> list[str]:
             consumed += len(data)
             if consumed > 1024 * 1024:
                 raise ValueError("decoded content limit")
-            forms.append(decoded)
+            forms.append((decoded, True))
     return forms
 
 
-def _rules(forms: list[str], deadline: float) -> list[_Finding]:
+def _rules(forms: list[tuple[str, bool]], deadline: float) -> list[_Finding]:
     results = []
-    for form_index, form in enumerate(forms):
+    for form, decoded in forms:
         for rule_id, category, pattern, base, context, validator in _RULES:
             for number, match in enumerate(pattern.finditer(form)):
                 if number % 1024 == 0 and time.monotonic() > deadline:
@@ -327,9 +439,9 @@ def _rules(forms: list[str], deadline: float) -> list[_Finding]:
                 score = base + (0.20 if contextual else 0)
                 if rule_id == "ASSIGNED_SECRET" and len(value) >= 20 and _entropy(value) >= 3.5:
                     score += 0.15
-                if form_index:
+                if decoded:
                     score += 0.10
-                results.append(_Finding(category, rule_id + ("_DECODED" if form_index else ""), min(0.99, score)))
+                results.append(_Finding(category, rule_id + ("_DECODED" if decoded else ""), min(0.99, score)))
     return results
 
 
@@ -340,11 +452,18 @@ def _rules(forms: list[str], deadline: float) -> list[_Finding]:
 _ENTROPY_CONTEXT = (
     "api key", "api_key", "api-key", "apikey", "secret", "access key", "access_key",
     "secret key", "secret_key", "private key", "private_key", "token", "credential",
-    "bearer", "密钥", "令牌", "口令",
+    "credentials", "bearer", "密钥", "令牌", "口令",
 )
+# Matched as whole words: as substrings, `token` hit `tokenizer/...` paths and
+# `max_tokens` in nearly every LLM tool output (3,333 of the context hits on
+# this machine's tool history). `_` and `-` still separate words, so
+# `access_token` and `x-api-key` keep matching.
+_ENTROPY_CONTEXT_RE = re.compile(
+    "|".join(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])" if word.isascii()
+             else re.escape(word) for word in _ENTROPY_CONTEXT))
 
 
-def _entropy_layer(forms: list[str], deadline: float) -> list[_Finding]:
+def _entropy_layer(forms: list[tuple[str, bool]], deadline: float) -> list[_Finding]:
     """Run over the decoded forms too: an encoded secret hides from the rules.
 
     Base64 or hex wrapping leaves a high-entropy blob whose *decoded* value is
@@ -353,7 +472,7 @@ def _entropy_layer(forms: list[str], deadline: float) -> list[_Finding]:
     """
     findings = []
     seen = set()
-    for form_index, form in enumerate(forms):
+    for form, decoded in forms:
         for number, match in enumerate(_ENTROPY_TOKENS.finditer(form)):
             if number % 1024 == 0 and time.monotonic() > deadline:
                 raise TimeoutError("entropy deadline")
@@ -369,15 +488,21 @@ def _entropy_layer(forms: list[str], deadline: float) -> list[_Finding]:
                 continue
             if _entropy(token) >= 3.6:
                 neighborhood = form[max(0, match.start() - 32):match.end() + 32].casefold()
-                context = any(word in neighborhood for word in _ENTROPY_CONTEXT)
+                # A path (`tokenizer/a1b2/...`, three or more separators) or a
+                # run longer than the 256-character window is a file name or an
+                # encoded blob, not a credential; the context word does not
+                # promote it. It is still recorded as uncorroborated entropy.
+                context = (token.count("/") < 3 and match.end() - match.start() < 256
+                           and not form[match.end():match.end() + 1].isalnum()
+                           and _ENTROPY_CONTEXT_RE.search(neighborhood) is not None)
                 # Uncorroborated high entropy is reported under its own rule ID.
                 # Commit SHAs, package hashes and opaque identifiers all look
                 # like this, so a deployment decides whether that alone denies.
-                suffix = "_DECODED" if form_index else ""
+                suffix = "_DECODED" if decoded else ""
                 findings.append(
                     _Finding("SECRET", "ENTROPY_TOKEN_CONTEXT" + suffix, 0.83)
                     if context else
-                    _Finding("SECRET", "ENTROPY_TOKEN" + suffix, 0.60 + 0.25 * bool(form_index)))
+                    _Finding("SECRET", "ENTROPY_TOKEN" + suffix, 0.60 + 0.25 * decoded))
     return findings
 
 

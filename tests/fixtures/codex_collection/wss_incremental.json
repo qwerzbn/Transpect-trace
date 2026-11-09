@@ -1,0 +1,22 @@
+{
+ "type": "response.create",
+ "model": "gpt-synthetic",
+ "previous_response_id": "resp_synthetic_1",
+ "input": [
+  {
+   "type": "function_call_output",
+   "call_id": "call_0",
+   "output": "synthetic output"
+  }
+ ],
+ "prompt_cache_key": "0a1b2c3d-0000-7000-8000-000000000001",
+ "client_metadata": {
+  "x-codex-turn-metadata": "{\"installation_id\":\"0a1b2c3d-0000-4000-8000-000000000003\",\"session_id\":\"0a1b2c3d-0000-7000-8000-000000000001\",\"thread_id\":\"0a1b2c3d-0000-7000-8000-000000000001\",\"turn_id\":\"0a1b2c3d-0000-7000-8000-000000000002\",\"window_id\":\"0a1b2c3d-0000-7000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"0a1b2c3d-0000-7000-8000-000000000004\",\"request_kind\":\"turn\",\"turn_trigger\":\"exec\",\"sandbox_mode\":\"danger-full-access\",\"workspaces\":{\"C:\\\\work\\\\synthetic\":{\"associated_remote_urls\":{\"origin\":\"https://example.invalid/synthetic.git\"},\"latest_git_commit_hash\":\"0123456789abcdef0123456789abcdef01234567\",\"has_changes\":true}},\"turn_started_at_unix_ms\":1793934410224,\"model\":\"gpt-synthetic\"}",
+  "x-codex-installation-id": "0a1b2c3d-0000-4000-8000-000000000003",
+  "session_id": "0a1b2c3d-0000-7000-8000-000000000001",
+  "thread_id": "0a1b2c3d-0000-7000-8000-000000000001",
+  "turn_id": "0a1b2c3d-0000-7000-8000-000000000002",
+  "root_turn_id": "0a1b2c3d-0000-7000-8000-000000000002",
+  "x-codex-window-id": "0a1b2c3d-0000-7000-8000-000000000001:0"
+ }
+}

@@ -30,6 +30,9 @@ class GuardRequest(BaseModel):
     outcome_for_request_id: str = ""
     outcome_action: Action = "none"
     outcome_captured_qpc: int = 0
+    diagnostic_stage: Literal["", "io_failed", "deadline_expired",
+                              "reply_shape_invalid", "reply_fields_invalid",
+                              "parsed_allow", "parsed_deny"] = ""
 
     @model_validator(mode="after")
     def control_shape(self):
@@ -37,6 +40,8 @@ class GuardRequest(BaseModel):
             raise ValueError("control frames cannot carry a model payload")
         if self.kind == "model.request" and self.protocol == "control":
             raise ValueError("model requests require a transport")
+        if self.diagnostic_stage and self.kind != "native.outcome":
+            raise ValueError("diagnostic stage is only valid on Native outcome frames")
         return self
 
 

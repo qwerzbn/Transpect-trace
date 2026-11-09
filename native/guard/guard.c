@@ -40,6 +40,29 @@
 #ifndef HTTP_EMPTY_ERROR_STRING
 #define HTTP_EMPTY_ERROR_STRING 0
 #endif
+#ifndef TTRACE_FAIL_STOP_DENY
+#define TTRACE_FAIL_STOP_DENY 0
+#endif
+#ifndef TTRACE_GRACEFUL_LEASE
+#define TTRACE_GRACEFUL_LEASE 0
+#endif
+#ifndef TTRACE_NONRETRY_DENY_LAB
+#define TTRACE_NONRETRY_DENY_LAB 0
+#endif
+#if TTRACE_NONRETRY_DENY_LAB
+#if TTRACE_FAIL_STOP_DENY || !TTRACE_GRACEFUL_LEASE || HTTP_EMPTY_ERROR_STRING
+#error "Nonretry lab denial needs an owned String and a graceful lease"
+#endif
+#ifndef API_ERROR_MAP_RVA
+#error "Nonretry lab denial needs a pinned API error mapper"
+#endif
+#ifndef API_ERROR_MAP_PREFIX_BYTES
+#error "Nonretry lab denial needs a pinned mapper entry prefix"
+#endif
+#endif
+#if TTRACE_GRACEFUL_LEASE && TTRACE_FAIL_STOP_DENY
+#error "A graceful lease cannot be combined with fail-stop denial"
+#endif
 #define LIMIT (16u * 1024u * 1024u)
 #define DEADLINE_MS 2000
 #ifndef TTRACE_EXPECTED_HASH
@@ -48,15 +71,42 @@
 static const char EXPECTED_HASH[] = TTRACE_EXPECTED_HASH;
 typedef void *(*HttpFn)(void *, void *, void *, void *);
 typedef void *(*WssFn)(void *, void *);
+#if TTRACE_NONRETRY_DENY_LAB
+typedef void *(*ApiErrorMapFn)(void *, void *);
+#endif
+#if !TTRACE_FAIL_STOP_DENY
 typedef void (*DropFn)(void *);
+#endif
 static HttpFn original_http;
 static WssFn original_wss;
+#if TTRACE_NONRETRY_DENY_LAB
+static ApiErrorMapFn original_api_error_map;
+static unsigned char *api_error_map_target;
+static unsigned char *http_target;
+static unsigned char *wss_target;
+static volatile LONG active_http_gates;
+static volatile LONG pending_http_sentinels;
+static volatile LONG active_mapper_gates;
+static const char DENY_SENTINEL[] =
+    "TTRACE_NATIVE_DENY_0167: Request blocked by Transpect local policy.";
+#endif
+#if !TTRACE_FAIL_STOP_DENY
 static DropFn drop_headers;
+#endif
 static volatile LONG sequence;
 static volatile LONG session_blocked;
 static char session_id[96];
 static wchar_t pipe_name[128];
 static HANDLE ready_event;
+#if TTRACE_GRACEFUL_LEASE
+/* Test-only lease: the controller main thread owns this mutex for the entire
+ * protected interval. If that thread exits or releases it, every detour
+ * bypasses policy and a watcher removes both MinHook patches. The DLL remains
+ * mapped so an already-running detour can return without a use-after-free. */
+static HANDLE lease_mutex;
+static HANDLE lease_disabled_event;
+static volatile LONG lease_bypass;
+#endif
 static _Thread_local char last_request_id[64];
 static _Thread_local char outcome_parent[64];
 static _Thread_local const char *outcome_action;
@@ -76,6 +126,38 @@ static int readable(const void *pointer, size_t bytes) {
     }
     return 1;
 }
+
+#if TTRACE_NONRETRY_DENY_LAB
+/* In the exact 0.167 binary, TransportError::Build is flattened as
+ * ApiError tag 10. Its owned String occupies words at +8/+16/+24. The
+ * InvalidPrompt variant is tag 25 with the same String layout. The string
+ * itself identifies this local denial; no shared request flag is needed. */
+static void *api_error_map_gate(void *result, void *error) {
+    InterlockedIncrement(&active_mapper_gates);
+    unsigned char *value = error;
+    int converted = 0;
+    if (readable(value, 32)) {
+        uintptr_t tag = 0, capacity = 0, pointer = 0, length = 0;
+        memcpy(&tag, value, 8);
+        if (tag == 10) {
+            memcpy(&capacity, value + 8, 8);
+            memcpy(&pointer, value + 16, 8);
+            memcpy(&length, value + 24, 8);
+            if (length == sizeof(DENY_SENTINEL) - 1 && capacity >= length &&
+                readable((void *)pointer, length) &&
+                !memcmp((void *)pointer, DENY_SENTINEL, length)) {
+                tag = 25;
+                memcpy(value, &tag, 8);
+                converted = 1;
+            }
+        }
+    }
+    void *returned = original_api_error_map(result, error);
+    if (converted) InterlockedDecrement(&pending_http_sentinels);
+    InterlockedDecrement(&active_mapper_gates);
+    return returned;
+}
+#endif
 
 static int same_binary(void) {
     wchar_t path[32768];
@@ -274,13 +356,89 @@ static void report_outcome(int action) {
     if(!QueueUserWorkItem(send_outcome,result,WT_EXECUTEDEFAULT))HeapFree(GetProcessHeap(),0,result);
 }
 
-static void *http_gate(void *result, void *request, void *headers, void *body) {
+#if TTRACE_GRACEFUL_LEASE
+static int lease_is_bypassed(void) {
+    if (InterlockedCompareExchange(&lease_bypass, 0, 0)) return 1;
+    if (!lease_mutex) return 1;
+    DWORD state = WaitForSingleObject(lease_mutex, 0);
+    if (state == WAIT_TIMEOUT) return 0;
+    /* A released or abandoned mutex means the controller no longer promises
+     * to answer. Take ownership only long enough to mark bypass and release. */
+    InterlockedExchange(&lease_bypass, 1);
+    if (state == WAIT_OBJECT_0 || state == WAIT_ABANDONED_0)
+        ReleaseMutex(lease_mutex);
+    return 1;
+}
+
+static DWORD WINAPI lease_watcher(void *unused) {
+    (void)unused;
+    DWORD state = WaitForSingleObject(lease_mutex, INFINITE);
+    InterlockedExchange(&lease_bypass, 1);
+    if (state == WAIT_OBJECT_0 || state == WAIT_ABANDONED_0)
+        ReleaseMutex(lease_mutex);
+    /* Never unload this DLL: a detour that entered before bypass may still be
+     * returning. Even if patch removal fails, its entry check passes through. */
+    MH_STATUS disabled;
+#if TTRACE_NONRETRY_DENY_LAB
+    MH_STATUS http_disabled = MH_DisableHook(http_target);
+    MH_STATUS wss_disabled = MH_DisableHook(wss_target);
+    if ((http_disabled != MH_OK && http_disabled != MH_ERROR_DISABLED) ||
+        (wss_disabled != MH_OK && wss_disabled != MH_ERROR_DISABLED))
+        return 11;
+    /* Every locally created Build error must reach the mapper before its
+     * patch is removed. If it never does, omit the full-disable ack. */
+    while (InterlockedCompareExchange(&active_http_gates, 0, 0) ||
+           InterlockedCompareExchange(&pending_http_sentinels, 0, 0) ||
+           InterlockedCompareExchange(&active_mapper_gates, 0, 0)) Sleep(10);
+    disabled = MH_DisableHook(api_error_map_target);
+#else
+    disabled = MH_DisableHook(MH_ALL_HOOKS);
+#endif
+    if (lease_disabled_event &&
+        (disabled == MH_OK || disabled == MH_ERROR_DISABLED))
+        SetEvent(lease_disabled_event);
+    return 0;
+}
+#endif
+
+#if TTRACE_FAIL_STOP_DENY
+/* The current lab has capture evidence, but no verified Rust deny-result ABI.
+ * A denied request must not return to the caller or invoke the original sender. */
+static void fail_stop_deny(void) {
+    TerminateProcess(GetCurrentProcess(), 76);
+    ExitProcess(76);
+    for (;;) Sleep(INFINITE);
+}
+#endif
+
+static void *http_gate_inner(void *result, void *request, void *headers, void *body) {
+#if TTRACE_GRACEFUL_LEASE
+    if (lease_is_bypassed()) return original_http(result, request, headers, body);
+#endif
     uintptr_t *b = body;
     int action = 1;
     if (readable(body, 65)) action = policy("model.request", "http", (void *)b[1], b[2]);
+#if TTRACE_GRACEFUL_LEASE
+    if (lease_is_bypassed()) return original_http(result, request, headers, body);
+#endif
     if (!action) return original_http(result, request, headers, body);
+#if TTRACE_FAIL_STOP_DENY
+    fail_stop_deny();
+#else
     if(action==3){TerminateProcess(GetCurrentProcess(),76);return result;}
-#if HTTP_EMPTY_ERROR_STRING
+#if TTRACE_NONRETRY_DENY_LAB
+    size_t length = sizeof(DENY_SENTINEL) - 1;
+    char *error = HeapAlloc(GetProcessHeap(), 0, length + 1);
+    if (!error) { length = 0; error = (char *)1; }
+    else memcpy(error, DENY_SENTINEL, length + 1);
+    drop_headers(headers);
+    uintptr_t *out = result;
+    out[0] = HTTP_DENIED_TAG;
+    out[1] = length ? length + 1 : 0;
+    out[2] = (uintptr_t)error;
+    out[3] = length;
+    if (length) InterlockedIncrement(&pending_http_sentinels);
+#elif HTTP_EMPTY_ERROR_STRING
     /* Fixed desktop ABI: Rust's empty String representation owns no buffer.
      * Never pass a Win32 HeapAlloc block to Rust's String destructor. */
     drop_headers(headers);
@@ -298,15 +456,46 @@ static void *http_gate(void *result, void *request, void *headers, void *body) {
     out[0] = HTTP_DENIED_TAG; out[1] = length ? length + 1 : 0; out[2] = (uintptr_t)error; out[3] = length;
 #endif
     report_outcome(action);
+#endif
     return result;
 }
 
+#if TTRACE_NONRETRY_DENY_LAB
+static void *http_gate(void *result, void *request, void *headers, void *body) {
+    InterlockedIncrement(&active_http_gates);
+    void *returned = http_gate_inner(result, request, headers, body);
+    InterlockedDecrement(&active_http_gates);
+    return returned;
+}
+#else
+#define http_gate http_gate_inner
+#endif
+
 static void *wss_gate(void *result, void *request) {
+#if TTRACE_GRACEFUL_LEASE
+    if (lease_is_bypassed()) return original_wss(result, request);
+#endif
     void *returned = original_wss(result, request);
+#if TTRACE_FAIL_STOP_DENY
+    if (!readable(result, 32)) fail_stop_deny();
+#endif
     uintptr_t *out = result;
-    if (out[0] != WSS_SUCCESS_TAG) return returned;
+    if (out[0] != WSS_SUCCESS_TAG) {
+#if TTRACE_FAIL_STOP_DENY
+        /* An unexpected result tag might be a changed success layout. */
+        fail_stop_deny();
+#else
+        return returned;
+#endif
+    }
     int action = policy("model.request", "wss", (void *)out[2], out[3]);
+#if TTRACE_GRACEFUL_LEASE
+    if (lease_is_bypassed()) return returned;
+#endif
     if (!action) return returned;
+#if TTRACE_FAIL_STOP_DENY
+    fail_stop_deny();
+#else
     if(action==3){TerminateProcess(GetCurrentProcess(),76);return returned;}
     const char *reason = "Transpect: request denied by local policy";
     size_t length = strlen(reason);
@@ -318,6 +507,7 @@ static void *wss_gate(void *result, void *request) {
     }
     out[0] = WSS_DENIED_TAG; /* ApiError::Stream(String), fixed-build layout. */
     report_outcome(action);
+#endif
     return returned;
 }
 
@@ -328,6 +518,20 @@ static DWORD WINAPI initialize(LPVOID unused) {
     ULARGE_INTEGER creation; creation.LowPart = created.dwLowDateTime; creation.HighPart = created.dwHighDateTime;
     snprintf(session_id, sizeof(session_id), "%lu-%llu", GetCurrentProcessId(), (unsigned long long)creation.QuadPart);
     swprintf(pipe_name, 128, L"\\\\.\\pipe\\ttrace-guard-%lu", GetCurrentProcessId());
+#if TTRACE_GRACEFUL_LEASE
+    wchar_t lease_name[160], disabled_name[160];
+    swprintf(lease_name, 160, L"Local\\ttrace-guard-lease-%hs", session_id);
+    swprintf(disabled_name, 160, L"Local\\ttrace-guard-disabled-%hs", session_id);
+    lease_mutex = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, lease_name);
+    if (!lease_mutex) return 7;
+    DWORD lease_state = WaitForSingleObject(lease_mutex, 0);
+    if (lease_state == WAIT_OBJECT_0 || lease_state == WAIT_ABANDONED_0)
+        ReleaseMutex(lease_mutex);
+    if (lease_state != WAIT_TIMEOUT)
+        return 7; /* The exact controller thread must own the lease already. */
+    lease_disabled_event = CreateEventW(NULL, TRUE, FALSE, disabled_name);
+    if (!lease_disabled_event || GetLastError() == ERROR_ALREADY_EXISTS) return 8;
+#endif
     /* No hooks become active before a compatible local engine responds. */
     if (policy("native.initialize", "control", NULL, 0) != 0) return 2;
     unsigned char *base = (unsigned char *)GetModuleHandleW(NULL);
@@ -335,17 +539,45 @@ static DWORD WINAPI initialize(LPVOID unused) {
     const unsigned char wss_prefix[] = WSS_ENTRY_PREFIX_BYTES;
     if (memcmp(base + HTTP_RVA, http_prefix, sizeof(http_prefix)) ||
         memcmp(base + WSS_RVA, wss_prefix, sizeof(wss_prefix))) return 3;
-#ifdef DROP_HEADERS_PREFIX_BYTES
+#if TTRACE_NONRETRY_DENY_LAB
+    const unsigned char api_error_map_prefix[] = API_ERROR_MAP_PREFIX_BYTES;
+    if (memcmp(base + API_ERROR_MAP_RVA, api_error_map_prefix,
+               sizeof(api_error_map_prefix))) return 3;
+    http_target = base + HTTP_RVA;
+    wss_target = base + WSS_RVA;
+    api_error_map_target = base + API_ERROR_MAP_RVA;
+#endif
+#if !TTRACE_FAIL_STOP_DENY && defined(DROP_HEADERS_PREFIX_BYTES)
     const unsigned char drop_prefix[] = DROP_HEADERS_PREFIX_BYTES;
     if (memcmp(base + DROP_HEADERS_RVA, drop_prefix, sizeof(drop_prefix))) return 3;
 #endif
+#if !TTRACE_FAIL_STOP_DENY
     drop_headers = (DropFn)(base + DROP_HEADERS_RVA);
+#endif
     if (MH_Initialize() != MH_OK) return 4;
     if (MH_CreateHook(base + HTTP_RVA, http_gate, (LPVOID *)&original_http) != MH_OK ||
-        MH_CreateHook(base + WSS_RVA, wss_gate, (LPVOID *)&original_wss) != MH_OK) {
+        MH_CreateHook(base + WSS_RVA, wss_gate, (LPVOID *)&original_wss) != MH_OK
+#if TTRACE_NONRETRY_DENY_LAB
+        || MH_CreateHook(base + API_ERROR_MAP_RVA, api_error_map_gate,
+                         (LPVOID *)&original_api_error_map) != MH_OK
+#endif
+        ) {
         MH_Uninitialize(); return 5;
     }
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) { MH_Uninitialize(); return 6; }
+#if TTRACE_GRACEFUL_LEASE
+    HANDLE watcher = CreateThread(NULL, 0, lease_watcher, NULL, 0, NULL);
+    if (!watcher) {
+        InterlockedExchange(&lease_bypass, 1);
+        MH_DisableHook(MH_ALL_HOOKS);
+        return 9;
+    }
+    CloseHandle(watcher);
+    if (lease_is_bypassed()) {
+        MH_DisableHook(MH_ALL_HOOKS);
+        return 10;
+    }
+#endif
     wchar_t ready_name[160];swprintf(ready_name,160,L"Local\\ttrace-guard-ready-%hs",session_id);
     ready_event=CreateEventW(NULL,TRUE,TRUE,ready_name);
     policy("native.ready", "control", NULL, 0);

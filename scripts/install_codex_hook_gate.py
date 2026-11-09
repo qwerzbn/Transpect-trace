@@ -24,6 +24,7 @@ space.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from transpect_trace.protect.codex_hook_gate import (  # noqa: E402
     CONFIG_ENV, CONFIG_SCHEMA, ENFORCED_EVENTS, MODES, OBSERVED_EVENTS,
 )
+from transpect_trace.protect.codex_gate_service import PIPE_PREFIX  # noqa: E402
 
 GATE_MARKER = "transpect-codex-dlp-gate"
 # Only events the gate answers. `PreModelRequest` is observe-only in this
@@ -45,8 +47,11 @@ ASYNC_EVENTS = frozenset(("PreModelRequest",))
 _TOML_EVENT_KEY = {
     "UserPromptSubmit": "user_prompt_submit",
     "PreToolUse": "pre_tool_use",
+    "PostToolUse": "post_tool_use",
     "PreModelRequest": "pre_model_request",
 }
+MANIFEST_NAME = "gate-manifest.json"
+MANIFEST_SCHEMA = "transpect.codex-hook-gate.manifest/1.0"
 
 
 def _handler(event: str, command: str) -> dict:
@@ -56,20 +61,30 @@ def _handler(event: str, command: str) -> dict:
     return handler
 
 
-def build_command(python: Path, entry: Path, config: Path) -> str:
+def build_command(python: Path, entry: Path, config: Path,
+                  client: Path | None = None) -> str:
+    """The hook command line. With `client`, Codex runs the native forwarder:
+    `client.exe <pipe> <python> <entry> <config>`; the last three are its
+    fail-closed fallback when the resident service is not answering."""
     parts = [str(python), str(entry), str(config)]
+    if client is not None:
+        from transpect_trace.protect.codex_gate_service import pipe_name
+        parts = [str(client), pipe_name(config)] + parts
     for part in parts:
         if " " in part or "\t" in part:
             raise ValueError(
                 f"Codex cannot quote hook command tokens; this path has a space: {part}")
-        if not Path(part).exists():
+        if not part.startswith(PIPE_PREFIX) and not Path(part).exists():
             raise ValueError(f"hook command path does not exist: {part}")
     return " ".join(parts)
 
 
 def write_gate_config(directory: Path, mode: str, registration: Path | None,
                       *, enforced_categories: list[str] | None = None,
-                      advisory_rule_ids: list[str] | None = None) -> Path:
+                      advisory_rule_ids: list[str] | None = None,
+                      codex_home: Path | None = None,
+                      review_override_ttl_seconds: int | None = None,
+                      egress_allowed_hosts: list[str] | None = None) -> Path:
     if mode not in MODES:
         raise ValueError("mode must be enforce or observe")
     directory.mkdir(parents=True, exist_ok=True)
@@ -85,8 +100,41 @@ def write_gate_config(directory: Path, mode: str, registration: Path | None,
         config["enforced_categories"] = sorted(set(enforced_categories))
     if advisory_rule_ids is not None:
         config["advisory_rule_ids"] = sorted(set(advisory_rule_ids))
+    if review_override_ttl_seconds is not None:
+        config["review_override_ttl_seconds"] = review_override_ttl_seconds
+    if egress_allowed_hosts is not None:
+        config["egress_allowed_hosts"] = sorted(set(egress_allowed_hosts))
+    # Editing any of these switches the gate off for later turns, so an agent
+    # tool call that names them is denied as GATE_TAMPER.
+    protected = [str(directory)]
+    if codex_home is not None:
+        protected += [str(codex_home / "hooks.json"), str(codex_home / "config.toml")]
+    config["protected_paths"] = sorted(set(protected))
     path = directory / "gate-config.json"
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def gate_source_files(root: Path = ROOT) -> list[Path]:
+    """Every file the hook process imports from this checkout."""
+    protect = root / "src" / "transpect_trace" / "protect"
+    files = [root / "scripts" / "codex_hook_gate.py",
+             root / "src" / "transpect_trace" / "__init__.py"]
+    files += sorted(protect.glob("*.py"))
+    return [path for path in files if path.is_file()]
+
+
+def write_manifest(directory: Path, command: str, files: list[Path]) -> Path:
+    """Record what was installed, so a later health check can detect drift."""
+    entries = []
+    for path in files:
+        entries.append({"path": str(path.resolve()),
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    document = {"schema": MANIFEST_SCHEMA, "command": command,
+                "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest(),
+                "events": list(INSTALLED_EVENTS), "files": entries}
+    path = directory / MANIFEST_NAME
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     return path
 
 
@@ -189,6 +237,36 @@ def remove_user_layer(codex_home: Path, *, dry_run: bool) -> dict:
             "written": not dry_run}
 
 
+SERVICE_TASK = "Transpect-Codex-Gate-Service"
+
+
+def register_service_task(python: Path, config: Path, *, dry_run: bool) -> dict:
+    """A per-user logon task (Limited, Interactive) that keeps the service up.
+
+    `pythonw.exe` when present, so no console window stays open. The task
+    restarts the service if it exits; a stopped service is still fail-closed
+    because the native client falls back to the per-event gate.
+    """
+    runner = python.with_name("pythonw.exe")
+    runner = runner if runner.is_file() else python
+    arguments = f'-m transpect_trace.protect.codex_gate_service "{config}"'
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$action = New-ScheduledTaskAction -Execute '{runner}' -Argument '{arguments}' -WorkingDirectory '{ROOT / "src"}'
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName '{SERVICE_TASK}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Transpect Codex DLP gate resident service' -Force | Out-Null
+Start-ScheduledTask -TaskName '{SERVICE_TASK}'
+"""
+    if dry_run:
+        return {"task": SERVICE_TASK, "registered": False, "script": script}
+    import subprocess
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                   check=True, capture_output=True, text=True, timeout=120)
+    return {"task": SERVICE_TASK, "registered": True, "runner": str(runner)}
+
+
 def default_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 
@@ -212,6 +290,13 @@ def main() -> None:
                         help="administrator-owned directory holding the enforced "
                              "hooks.json; defaults to <managed>/managed-hooks")
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
+    parser.add_argument("--client", choices=("python", "native"), default="python",
+                        help="native: Codex runs build/codex-gate-client/codex_gate_client.exe, "
+                             "which asks the resident service and falls back to the Python gate")
+    parser.add_argument("--register-service", action="store_true",
+                        help="register a per-user logon task that runs the resident service")
+    parser.add_argument("--review-override-ttl", type=int, default=None,
+                        help="seconds a REVIEW approval code stays valid; 0 disables")
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -226,10 +311,19 @@ def main() -> None:
         return
 
     gate_directory = args.gate_directory.resolve()
-    config = write_gate_config(gate_directory, args.mode, args.registration)
+    config = write_gate_config(gate_directory, args.mode, args.registration,
+                               codex_home=codex_home,
+                               review_override_ttl_seconds=args.review_override_ttl)
+    client = None
+    if args.client == "native":
+        client = (ROOT / "build" / "codex-gate-client" / "codex_gate_client.exe")
+        if not client.is_file():
+            raise SystemExit("build the client first: "
+                             "uv run --no-sync python scripts/build_codex_gate_client.py")
+        client = client.resolve()
     command = build_command(args.python.resolve(strict=True),
                             (ROOT / "scripts" / "codex_hook_gate.py").resolve(strict=True),
-                            config)
+                            config, client)
     if args.layer == "user":
         result = install_user_layer(codex_home, command, dry_run=args.dry_run)
     else:
@@ -242,6 +336,12 @@ def main() -> None:
                   enforced_events=sorted(ENFORCED_EVENTS),
                   observed_events=sorted(OBSERVED_EVENTS),
                   config_env=CONFIG_ENV)
+    if not args.dry_run:
+        files = gate_source_files() + ([client] if client else [])
+        result["manifest"] = str(write_manifest(gate_directory, command, files))
+    if args.register_service:
+        result["service_task"] = register_service_task(args.python.resolve(strict=True), config,
+                                                       dry_run=args.dry_run)
     preview = result.pop("preview")
     print(json.dumps(result, indent=2, ensure_ascii=False))
     print("\n--- file content ---\n" + preview)

@@ -1,0 +1,121 @@
+{
+ "model": "gpt-synthetic",
+ "stream": true,
+ "input": [
+  {
+   "type": "message",
+   "id": "msg_cb88ad40-6051-5da8-9905-086af4cdcd67",
+   "role": "developer",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "You are a synthetic coding agent used in collection tests."
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_0a1b2c3d-0000-7000-8000-0000000000a1",
+   "role": "developer",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "<permissions instructions>\nSynthetic sandbox policy.\n</permissions instructions>"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_0a1b2c3d-0000-7000-8000-0000000000a2",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "# AGENTS.md instructions for C:\\work\\synthetic\n\n<INSTRUCTIONS>\n# Project\r\nUse short answers.\r\n\n</INSTRUCTIONS>"
+    },
+    {
+     "type": "input_text",
+     "text": "<environment_context>\n  <cwd>C:\\work\\synthetic</cwd>\n  <shell>powershell</shell>\n</environment_context>"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_0a1b2c3d-0000-7000-8000-0000000000a3",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "read notes.txt"
+    }
+   ]
+  },
+  {
+   "type": "function_call",
+   "name": "exec_command",
+   "arguments": "{\"cmd\": \"Get-Content notes.txt\"}",
+   "call_id": "call_0"
+  },
+  {
+   "type": "function_call_output",
+   "id": "fco_0a1b2c3d-0000-7000-8000-0000000000b1",
+   "call_id": "call_0",
+   "output": "Chunk ID: a1b2c3\nWall time: 0.5000 seconds\nProcess exited with code 0\nOriginal token count: 9\nOutput:\nmeeting notes TTRACE_SYNTHETIC_MARKER_5521\r\n"
+  }
+ ],
+ "tools": [
+  {
+   "type": "function",
+   "name": "exec_command",
+   "description": "Runs a synthetic command.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "cmd": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "cmd"
+    ]
+   }
+  },
+  {
+   "type": "function",
+   "name": "view_image",
+   "description": "Shows a synthetic image.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  }
+ ],
+ "tool_choice": "auto",
+ "parallel_tool_calls": true,
+ "reasoning": {
+  "summary": "auto"
+ },
+ "store": false,
+ "include": [
+  "reasoning.encrypted_content"
+ ],
+ "prompt_cache_key": "0a1b2c3d-0000-7000-8000-000000000001",
+ "client_metadata": {
+  "x-codex-turn-metadata": "{\"installation_id\":\"0a1b2c3d-0000-4000-8000-000000000003\",\"session_id\":\"0a1b2c3d-0000-7000-8000-000000000001\",\"thread_id\":\"0a1b2c3d-0000-7000-8000-000000000001\",\"turn_id\":\"0a1b2c3d-0000-7000-8000-000000000002\",\"window_id\":\"0a1b2c3d-0000-7000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"0a1b2c3d-0000-7000-8000-000000000004\",\"request_kind\":\"turn\",\"turn_trigger\":\"exec\",\"sandbox_mode\":\"danger-full-access\",\"workspaces\":{\"C:\\\\work\\\\synthetic\":{\"associated_remote_urls\":{\"origin\":\"https://example.invalid/synthetic.git\"},\"latest_git_commit_hash\":\"0123456789abcdef0123456789abcdef01234567\",\"has_changes\":true}},\"turn_started_at_unix_ms\":1793934410224,\"model\":\"gpt-synthetic\"}",
+  "x-codex-installation-id": "0a1b2c3d-0000-4000-8000-000000000003",
+  "session_id": "0a1b2c3d-0000-7000-8000-000000000001",
+  "thread_id": "0a1b2c3d-0000-7000-8000-000000000001",
+  "turn_id": "0a1b2c3d-0000-7000-8000-000000000002",
+  "root_turn_id": "0a1b2c3d-0000-7000-8000-000000000002",
+  "x-codex-window-id": "0a1b2c3d-0000-7000-8000-000000000001:0"
+ }
+}

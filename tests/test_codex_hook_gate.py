@@ -124,10 +124,18 @@ def test_main_denies_an_unparseable_event_for_an_enforced_name(tmp_path):
     assert gate.main([str(config)], blocked, out) == 0
     assert json.loads(bytes(out.written))["decision"] == "block"
 
-    # A truncated event cannot be inspected; the reply must still deny.
+    # A truncated event cannot be inspected; its name is still recoverable, so
+    # the reply must deny. (It used to print nothing, which the client reads
+    # as allow.)
     truncated = Stream(b'{"hook_event_name":"UserPromptSubmit"')
     out = Stream()
     assert gate.main([str(config)], truncated, out) == 0
+    assert json.loads(bytes(out.written))["decision"] == "block"
+
+    # With no recoverable name there is nothing to deny in the client's terms.
+    nameless = Stream(b'{"prompt":')
+    out = Stream()
+    assert gate.main([str(config)], nameless, out) == 0
     assert bytes(out.written) == b""
 
 

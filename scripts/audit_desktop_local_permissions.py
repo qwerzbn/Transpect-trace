@@ -1,7 +1,7 @@
-"""Read only the effective permission metadata of the dedicated Local test chat.
+"""Read only the effective permission metadata of a selected Local chat.
 
-This tool is deliberately pinned to one synthetic desktop chat. It never parses
-user messages, tool outputs, or model content from the rollout JSONL file.
+The default is a dedicated synthetic desktop chat. It never parses user
+messages, tool outputs, or model content from the rollout JSONL file.
 """
 from __future__ import annotations
 
@@ -10,12 +10,28 @@ import json
 from pathlib import Path
 import re
 import sys
+from uuid import UUID
 
 
 SCHEMA = "transpect.desktop-local-permission-audit/1.0"
 TEST_THREAD_ID = "01a1a5ad-14de-7861-afe8-7670bfb99d3b"
 _TYPE_IN_PREFIX = re.compile(rb'"type":"([a-z_]+)"')
 _MAX_CONTEXT_BYTES = 8 * 1024 * 1024
+
+
+def _normalize_thread_id(value: str) -> str:
+    """Require a UUID before it can be interpolated into a rollout glob."""
+    try:
+        return str(UUID(value))
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ValueError("thread_id_must_be_uuid") from error
+
+
+def _thread_id_argument(value: str) -> str:
+    try:
+        return _normalize_thread_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def _context_records(path: Path):
@@ -51,8 +67,9 @@ def _string_field(value: object, key: str) -> str | None:
     return value.get(key) if isinstance(value, dict) and isinstance(value.get(key), str) else None
 
 
-def audit(sessions_root: Path) -> dict:
-    candidates = list(sessions_root.glob(f"**/rollout-*-{TEST_THREAD_ID}.jsonl"))
+def audit(sessions_root: Path, thread_id: str = TEST_THREAD_ID) -> dict:
+    thread_id = _normalize_thread_id(thread_id)
+    candidates = list(sessions_root.glob(f"**/rollout-*-{thread_id}.jsonl"))
     if len(candidates) != 1:
         raise ValueError("test_rollout_missing" if not candidates else "multiple_test_rollouts")
     path = candidates[0]
@@ -87,7 +104,7 @@ def audit(sessions_root: Path) -> dict:
         status = "restricted_policy_observed"
     return {
         "schema": SCHEMA,
-        "thread_id": TEST_THREAD_ID,
+        "thread_id": thread_id,
         "rollout_file": path.name,
         "read_only": True,
         "context_count": len(rows),
@@ -96,7 +113,7 @@ def audit(sessions_root: Path) -> dict:
         "desktop_tool_offline_attested": False,
         "desktop_tool_mxc_attested": False,
         "interpretation": (
-            "The Local test chat has unrestricted command permissions."
+            "The selected Local chat has unrestricted command permissions."
             if status == "unrestricted" else
             "The recorded policy alone does not prove Windows MXC isolation or zero-byte tool egress."
         ),
@@ -107,11 +124,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sessions-root", type=Path,
                         default=Path.home() / ".codex" / "sessions")
+    parser.add_argument("--thread-id", type=_thread_id_argument, default=TEST_THREAD_ID,
+                        help="Local chat UUID (default: dedicated synthetic test chat)")
     args = parser.parse_args()
     try:
-        result = audit(args.sessions_root)
+        result = audit(args.sessions_root, args.thread_id)
     except (OSError, ValueError) as error:
-        result = {"schema": SCHEMA, "thread_id": TEST_THREAD_ID,
+        result = {"schema": SCHEMA, "thread_id": args.thread_id,
                   "read_only": True, "status": "unvalidated",
                   "error": str(error), "desktop_tool_offline_attested": False,
                   "desktop_tool_mxc_attested": False}

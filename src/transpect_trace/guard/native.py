@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes as c
 from ctypes import wintypes as w
 import json
+import ntpath
 import os
 from pathlib import Path
 import subprocess
@@ -110,6 +111,21 @@ def inject(pid:int,dll:Path,expected_identity:dict|None=None,*,launched_cli:bool
     if not handle:raise c.WinError(c.get_last_error())
     allocation=None;thread=None;completed=False
     try:
+        # The resolver ran before OpenProcess. Bind the handle used for
+        # LoadLibrary to that same process generation and image path, closing
+        # the PID reuse window between the two operations.
+        times=[w.FILETIME() for _ in range(4)]
+        if not k.GetProcessTimes(handle,*(c.byref(t) for t in times)):
+            raise c.WinError(c.get_last_error())
+        birth=times[0].dwLowDateTime+(times[0].dwHighDateTime<<32)
+        if birth!=identity["creation_filetime"]:
+            raise ValueError("PID was reused before native loader opened the target")
+        image=c.create_unicode_buffer(32768);image_size=w.DWORD(len(image))
+        if not k.QueryFullProcessImageNameW(handle,0,image,c.byref(image_size)):
+            raise c.WinError(c.get_last_error())
+        expected_path=identity["baseline"]["path"]
+        if ntpath.normcase(ntpath.normpath(image.value))!=ntpath.normcase(ntpath.normpath(expected_path)):
+            raise ValueError("target image changed before native loader opened the target")
         local=k.GetProcAddress(k.GetModuleHandleW("kernel32.dll"),b"LoadLibraryW")
         owner=w.HMODULE()
         if not k.GetModuleHandleExW(6,c.cast(local,w.LPCWSTR),c.byref(owner)):raise c.WinError(c.get_last_error())

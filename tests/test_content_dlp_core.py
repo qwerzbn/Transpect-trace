@@ -130,6 +130,17 @@ def test_inspector_error_fails_closed(monkeypatch):
     assert "fake secret" not in repr(result)
 
 
+def test_email_rule_is_bounded_on_long_username_like_text():
+    engine = ContentDLPEngine()
+    # The old unanchored local-part regex retried from every character, spent
+    # seconds on this ordinary text, and returned INSPECTION_FAILED.
+    long_text = "a." * 15_000
+    verdict = engine.inspect_text(long_text)
+    assert verdict.decision == "ALLOW" and verdict.reason == "REQUIRED_CHECKS_COMPLETE"
+    found = engine.inspect_text("contact name@example.com for public notes")
+    assert "EMAIL" in found.rule_ids
+
+
 def test_office_split_runs_and_metadata_are_checked():
     engine = ContentDLPEngine()
     split = _office("docx", "pass</t><t>word=" + SECRET)
