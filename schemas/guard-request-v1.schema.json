@@ -116,6 +116,20 @@
       "default": 0,
       "title": "Outcome Captured Qpc",
       "type": "integer"
+    },
+    "diagnostic_stage": {
+      "default": "",
+      "enum": [
+        "",
+        "io_failed",
+        "deadline_expired",
+        "reply_shape_invalid",
+        "reply_fields_invalid",
+        "parsed_allow",
+        "parsed_deny"
+      ],
+      "title": "Diagnostic Stage",
+      "type": "string"
     }
   },
   "required": [

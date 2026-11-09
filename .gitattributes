@@ -4,3 +4,12 @@ patches/ecapture-windows/enhanced/** -text
 patches/ecapture-windows/target-bound/*.patch -text whitespace=-space-before-tab
 patches/ecapture-windows/target-bound/*.go -text
 scripts/start_desktop_dlp_vm_wsl.sh text eol=lf
+
+# Byte-pinned controller and Native sources. desktop_demo.py admits the
+# controller only when these match SHA-256 values recorded in the build
+# manifest and lab reports; the pins were taken on these exact endings.
+# Changing a line ending here invalidates the pins and needs re-validation.
+src/transpect_trace/protect/content_dlp.py       text eol=lf
+src/transpect_trace/protect/native_collection.py text eol=crlf
+src/transpect_trace/protect/collection_eval.py   text eol=crlf
+native/guard/guard.c                             text eol=crlf
