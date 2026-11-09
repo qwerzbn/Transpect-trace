@@ -451,6 +451,14 @@ class _DecisionLog:
         return decision, row
 
 
+class _Exited(Exception):
+    """The backend exited before or while it was being attached."""
+
+
+class _Incompatible(Exception):
+    """Another guard DLL build is already resident in the backend."""
+
+
 class BackendController(threading.Thread):
     def __init__(self, details: dict, dll: Path, engine, results: dict, run_dir: Path,
                  status: BackendStatus, log: Callable[[str], None]):
@@ -484,42 +492,64 @@ class BackendController(threading.Thread):
         lease = Lease(pid, birth)
         pipe = None
         controlled = True
+        k = _kernel()
+        process = k.OpenProcess(0x100000, False, pid)  # SYNCHRONIZE
+
+        def alive() -> bool:
+            return bool(process) and k.WaitForSingleObject(process, 0) == 258  # WAIT_TIMEOUT
+
         try:
+            if not alive():
+                raise _Exited()
             engine = _DecisionLog(self.engine, self.results, self._decision)
             pipe = PipeServer(pid, engine, self.run_dir / f"native-audit-{pid}.jsonl",
                               client_sid=self.details["user_sid"])
             pipe.start()
             lease.acquire()
-            resident = resident_guard_dlls(pid)
-            if not resident:
-                inject(pid, self.dll, identity, identity_resolver=lambda _pid: dict(identity))
-                if not wait_ready(identity, 15):
-                    raise RuntimeError("Native DLL did not become ready")
-                status.mode = "已注入"
-            elif resident == [self.dll.name]:
-                lease.resume()
-                if not wait_ready(identity, 2):
-                    raise RuntimeError("resident Native DLL is not ready")
-                status.mode = "已重连"
-            else:
-                controlled = False
-                raise RuntimeError("进程内已有其他版本的 DLL，请重启 Codex")
+            # A backend that is still starting or already exiting can refuse
+            # access for a moment; retry while it lives. A DLL that loaded but
+            # was not ready yet is then taken over instead of injected twice.
+            for attempt in range(3):
+                try:
+                    resident = resident_guard_dlls(pid)
+                    if not resident:
+                        inject(pid, self.dll, identity,
+                               identity_resolver=lambda _pid: dict(identity))
+                        if not wait_ready(identity, 15):
+                            raise RuntimeError("Native DLL did not become ready")
+                        status.mode = "已注入"
+                    elif resident == [self.dll.name]:
+                        lease.resume()
+                        if not wait_ready(identity, 2):
+                            raise RuntimeError("resident Native DLL is not ready")
+                        status.mode = "已重连"
+                    else:
+                        raise _Incompatible()
+                    break
+                except _Incompatible:
+                    raise
+                except Exception:
+                    if not alive():
+                        raise _Exited()
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.5)
             status.attach_ms = (time.monotonic() - began) * 1000
             status.state = "PROTECTED"
             self.log(f"[Codex {pid}] 已接入防护（{status.mode}，{status.attach_ms:.0f} ms）")
-            k = _kernel()
-            process = k.OpenProcess(0x100000, False, pid)
-            try:
-                while not self.stop_requested.is_set():
-                    if process and k.WaitForSingleObject(process, 250) == 0:
-                        status.state, status.detail = "EXITED", "Codex 后端已退出"
-                        self.log(f"[Codex {pid}] 后端已退出")
-                        break
-                    if not process:
-                        time.sleep(0.25)
-            finally:
-                if process:
-                    k.CloseHandle(process)
+            while not self.stop_requested.is_set():
+                if k.WaitForSingleObject(process, 250) == 0:
+                    status.state, status.detail = "EXITED", "Codex 后端已退出"
+                    self.log(f"[Codex {pid}] 后端已退出")
+                    break
+        except _Exited:
+            status.state, status.detail = "EXITED", "后端在接入完成前已退出"
+            self.log(f"[Codex {pid}] 后端在接入完成前已退出，无需防护")
+        except _Incompatible:
+            controlled = False
+            status.state = "FAILED"
+            status.detail = "进程内已有其他版本的 DLL，请重启 Codex"
+            self.log(f"[Codex {pid}] 接入失败：{status.detail}")
         except Exception as error:  # report and leave the DLL fail-closed
             status.state, status.detail = "FAILED", f"{type(error).__name__}: {error}"
             self.log(f"[Codex {pid}] 接入失败：{status.detail}")
@@ -530,6 +560,8 @@ class BackendController(threading.Thread):
             try:
                 lease.release(controlled=controlled and status.state != "FAILED")
             finally:
+                if process:
+                    k.CloseHandle(process)
                 if pipe is not None:
                     pipe.close()
                 self.finished.set()

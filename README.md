@@ -19,7 +19,7 @@ Codex 客户端（codex.exe app-server）
 
 | 层 | 作用 | 主要实现 |
 |---|---|---|
-| 采集层 | Native DLL 加载到 `codex.exe app-server`，在请求序列化完成后、发送前取得完整正文；客户端 zstd 压缩的正文还原后检查 | `native/guard/guard.c`、`src/transpect_trace/guard/`、`src/transpect_trace/protect/wire_items.py` |
+| 采集层 | Native DLL 加载到 `codex.exe app-server`，在请求序列化完成后、发送前取得完整正文；客户端 zstd 压缩的正文还原后检查 | `native/guard/desktop_guard.c`、`src/transpect_trace/guard/`、`src/transpect_trace/protect/wire_items.py` |
 | 内容识别层 | 规则与校验、熵分析、EDM 精确匹配、文档与源码指纹；检查原文、解码内容和规范化内容 | `src/transpect_trace/protect/content_dlp.py`、`protect/tool_policy.py` |
 | 拦截层 | 判定只有放行与拒绝；拒绝以客户端原生错误返回，不触发重试 | `src/transpect_trace/protect/native_collection.py`、`guard/pipe.py` |
 | 审计与行为关联 | 判定记录与 AES-GCM 加密归档（DPAPI 保护密钥）；ETW 进程、文件、网络元数据 | `src/transpect_trace/protect/archive.py`、`src/transpect_trace/behavior/` |
@@ -38,68 +38,67 @@ Codex 客户端（codex.exe app-server）
 
 ## 快速开始
 
-环境：Windows x64、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Python 3.12 x64。以下命令在仓库根目录的 PowerShell 中执行。
+环境：Windows x64、已安装 Codex 桌面端 `26.1103.3517.0`、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Git Bash。在仓库根目录执行：
 
-```powershell
-uv python install 3.12
-uv sync --locked --dev --extra observe --extra native-build
+```bash
+./start.sh
 ```
 
-### 1. 构建 Native DLL
+首次运行会自动安装依赖并在本机编译 Native DLL，约 1 分钟；之后秒级启动。防护启动后持续扫描当前用户的 Codex 后端：
+- 已在运行的 Codex 立即接入；
+- 之后启动或重启的 Codex 自动接入，从进程创建到受保护约 1 秒。
 
-构建脚本读取当前桌面后端，核对哈希与挂钩点入口字节，并要求隔离采集实验的证据存在于 `runs/scratch/adapt-26.1103/`。证据的生成步骤见 [桌面 Demo 记录](docs/development/desktop-system-hook-demo.md)。
+每次判定打印一行：
 
-```powershell
-uv run --no-sync python scripts/build_guard_nonretry_current_lab.py
+```text
+14:33:04 [Codex 7408] 已接入防护（已重连，0 ms）
+14:36:09 [Codex 7408] 拒绝  wss 97 KB  658 ms  ENTROPY_TOKEN, GITHUB_TOKEN
 ```
 
-### 2. 检查准入
+| 命令 | 作用 |
+|---|---|
+| `./start.sh` | 在当前窗口启动防护，Ctrl+C 或关闭窗口即停止 |
+| `./start.sh install` | 登录时自动启动，并立即在后台启动 |
+| `./start.sh status` | 查看防护和各 Codex 后端的状态与计数 |
+| `./start.sh stop` | 停止后台运行的防护 |
+| `./start.sh uninstall` | 取消登录自启并停止 |
 
-`status` 只读，不加载 DLL。它核对桌面进程身份、DLL 与构建清单、隔离实验证据及控制器源码哈希。
+- **停止行为**：通过 Ctrl+C、关闭窗口或 `stop` 停止后，已接入的 Codex 恢复直接发送。防护进程被强制结束或崩溃时，Codex 的请求一律被拒，直到防护重新启动。
+- **重新接管**：防护重启后会接管已注入的 Codex 进程，无需重启 Codex。
+- **运行记录**：保存在 `%LOCALAPPDATA%\TranspectTrace\desktop-guard\runs\<启动时间>\`。`native-audit-<PID>.jsonl` 是逐请求判定，`collection.jsonl` 是逐条目识别结果，`archive/` 是加密正文。
+- **版本不符**：Codex 版本不受支持时不接入，状态显示 `UNSUPPORTED_VERSION`，此时需关闭应用商店的自动更新。
+
+### 行为审计
+
+从有 ETW 权限的终端，对已核对的后端 PID 运行有界采集：
 
 ```powershell
-$appServerPid = (Get-CimInstance Win32_Process -Filter "Name='codex.exe'" |
-  Where-Object CommandLine -match ' app-server ').ProcessId
-uv run --no-sync python scripts/desktop_demo.py status --pid $appServerPid --guard nonretry_lease
+uv run --no-sync ttrace behavior attach --channel desktop --pid <app-server PID> --output runs/desktop-system-hook/etw-001 --duration 30
 ```
 
-### 3. 接入与停止
+### 开发与验证
 
-```powershell
-$runDir = "runs/scratch/desktop-live-$(Get-Date -Format yyyyMMdd-HHmmss)"
-uv run --no-sync python scripts/desktop_demo.py run --pid $appServerPid --guard nonretry_lease --seconds 3600 --output $runDir
-uv run --no-sync python scripts/desktop_demo.py stop --output $runDir
-```
-
-- **前提**：实机接入受 `scripts/desktop_demo.py` 中 `LIVE_TRIALS_PAUSED` 开关控制。
-- **运行记录**：输出目录中，`native-audit.jsonl` 记录每次请求的判定，`collection.jsonl` 记录逐条目的识别结果，`archive/` 保存加密正文，`status.json` 是控制器状态快照。
-- **重新接入**：控制器停止后 Hook 停用，DLL 仍驻留在该进程中；要再次接入，需先完全重启 Codex。
-
-### 4. 行为审计
-
-从有 ETW 权限的终端对已核对的后端 PID 运行有界采集：
-
-```powershell
-uv run --no-sync ttrace behavior attach --channel desktop --pid $appServerPid --output runs/desktop-system-hook/etw-001 --duration 30
-```
-
-### 5. 测试
-
-```powershell
+```bash
 uv run --no-sync python -m pytest -q
+uv run --no-sync python scripts/probe_desktop_guard_production_lab.py --backend <codex.exe 路径> --output runs/scratch/prod-lab
 ```
+
+隔离实验在独立的 `app-server` 子进程和本地不转发源站上，依次验证注入、主动停止、重连、控制器丢失、恢复五个阶段。运行前需先停止防护，否则防护会接管实验进程。
 
 ## 目录
 
 | 路径 | 内容 |
 |---|---|
-| `native/guard/` | Native DLL 源码（MinHook） |
+| `start.sh` | 一键启动入口 |
+| `deploy/desktop-guard/` | 版本固定文件：每个受支持版本的后端哈希、挂钩点与 ABI |
+| `native/guard/desktop_guard.c` | 生产版 Native DLL 源码（MinHook）；`guard.c` 为冻结的实验版本 |
 | `src/transpect_trace/guard/` | 注入、命名管道服务、请求与判定协议 |
 | `src/transpect_trace/protect/` | 请求解析、内容识别、工具动作策略、加密归档、采集记录 |
 | `src/transpect_trace/behavior/` | ETW 采集、桌面进程身份、行为报告 |
-| `scripts/desktop_demo.py` | 桌面端控制器：准入检查、接入、停止 |
-| `scripts/desktop_guard_supervisor.py`、`scripts/manage_desktop_guard_autostart.py` | 桌面进程自动发现与登录启动 |
-| `scripts/build_guard_*_lab.py`、`scripts/probe_desktop_*_lab.py` | DLL 构建与隔离实验 |
+| `src/transpect_trace/guard/desktop_service.py` | 生产防护：本机构建、进程扫描、注入、租约与重连 |
+| `scripts/desktop_guard.py` | `start.sh` 调用的命令行入口 |
+| `scripts/probe_desktop_guard_production_lab.py` | 生产版 DLL 的隔离生命周期实验 |
+| `scripts/desktop_demo.py`、`scripts/build_guard_*_lab.py`、`scripts/probe_desktop_*_lab.py` | 开发期的实验控制器、实验 DLL 构建与隔离实验 |
 | `docs/` | 技术方案与开发记录 |
 
 ## 文档
