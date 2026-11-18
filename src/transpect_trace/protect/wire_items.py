@@ -61,7 +61,7 @@ _ITEM_METADATA_KEYS = frozenset(("internal_chat_message_metadata_passthrough", "
 
 @dataclass
 class WireRequest:
-    format: str                      # responses | wss_response_create | unknown
+    format: str                      # responses | wss_response_create | anthropic_messages | unknown
     items: list[CollectedItem]
     correlation: dict
     incremental: bool                # previous_response_id: a delta, not the full context
@@ -298,6 +298,15 @@ def parse_wire_request(raw: bytes, *, protocol: str) -> WireRequest:
 
     Raises ValueError when the body cannot be parsed; a JSON body of another
     shape returns format `unknown` with no items."""
+    if protocol == "http":
+        try:
+            possible = json.loads(raw)
+        except (UnicodeError, ValueError):
+            possible = None
+        if (isinstance(possible, dict) and "messages" in possible
+                and "input" not in possible):
+            from .claude_wire import parse_claude_messages
+            return parse_claude_messages(possible, raw)
     sha = hashlib.sha256(raw).hexdigest()
     semantics = extract_request(raw, observation_id=sha, capture_source="native",
                                 completeness="complete", protocol=protocol)

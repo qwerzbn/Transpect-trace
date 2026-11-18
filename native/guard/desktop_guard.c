@@ -9,7 +9,14 @@
  *   LOST     lease free and the stop event is not set  -> deny (fail closed)
  *
  * Hooks are never removed, so a new controller can take the lease of the same
- * backend process and resume inspection without restarting Codex. */
+ * backend process and resume inspection without restarting Codex.
+ *
+ * Tool execution: observed backend child-process creation through
+ * CreateProcessW is gated before the process exists. The application,
+ * command line and directory are sent as a `tool.exec` request, and a denial
+ * fails the call with ERROR_ACCESS_DENIED. This does not cover calls inside
+ * an already-running MCP server or descendants' own network traffic. The
+ * same lease states apply. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <bcrypt.h>
@@ -47,6 +54,9 @@
 #endif
 #ifndef HTTP_DENIED_TAG
 #define HTTP_DENIED_TAG 3
+#endif
+#ifndef API_ERROR_DENIED_TAG
+#define API_ERROR_DENIED_TAG 25
 #endif
 #ifndef HTTP_EMPTY_ERROR_STRING
 #define HTTP_EMPTY_ERROR_STRING 0
@@ -126,13 +136,14 @@ static _Thread_local const char *outcome_action;
 static _Thread_local long long last_request_qpc;
 static _Thread_local long long outcome_qpc;
 
-static int readable(const void *pointer, size_t bytes) {
+static int buffer_accessible(const void *pointer, size_t bytes, int for_write) {
     uintptr_t p = (uintptr_t)pointer, end = p + bytes;
     if (p < 0x10000 || end < p || bytes > LIMIT) return 0;
     while (p < end) {
         MEMORY_BASIC_INFORMATION m;
         if (!VirtualQuery((void *)p, &m, sizeof(m)) || m.State != MEM_COMMIT ||
             (m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return 0;
+        if (for_write && (m.Protect & 0xff) != PAGE_READWRITE) return 0;
         uintptr_t next = (uintptr_t)m.BaseAddress + m.RegionSize;
         if (next <= p) return 0;
         p = next < end ? next : end;
@@ -140,11 +151,16 @@ static int readable(const void *pointer, size_t bytes) {
     return 1;
 }
 
+static int readable(const void *pointer, size_t bytes) {
+    return buffer_accessible(pointer, bytes, 0);
+}
+
 #if TTRACE_NONRETRY_DENY_LAB
 /* In the exact 0.167 binary, TransportError::Build is flattened as
  * ApiError tag 10. Its owned String occupies words at +8/+16/+24. The
- * InvalidPrompt variant is tag 25 with the same String layout. The string
- * itself identifies this local denial; no shared request flag is needed. */
+ * pinned denial variant has the same String layout (tag 25 on 0.167).
+ * The string itself identifies this local denial; no shared request flag
+ * is needed. */
 static void *api_error_map_gate(void *result, void *error) {
     InterlockedIncrement(&active_mapper_gates);
     unsigned char *value = error;
@@ -159,7 +175,7 @@ static void *api_error_map_gate(void *result, void *error) {
             if (length == sizeof(DENY_SENTINEL) - 1 && capacity >= length &&
                 readable((void *)pointer, length) &&
                 !memcmp((void *)pointer, DENY_SENTINEL, length)) {
-                tag = 25;
+                tag = API_ERROR_DENIED_TAG;
                 memcpy(value, &tag, 8);
                 converted = 1;
             }
@@ -248,10 +264,10 @@ static int json_field(const char *json, const jsmntok_t *t, int n,
 }
 
 static int whitespace(char c) { return c==' ' || c=='\t' || c=='\r' || c=='\n'; }
-/* The decision contract is exactly six string fields. jsmn tokenization alone
+/* Six decision fields or seven when a replacement body follows. Tokenization alone
  * does not reject missing commas, multiple roots or duplicate object keys. */
 static int decision_shape(const char *json, size_t bytes, const jsmntok_t *t, int n) {
-    if (n != 13 || t[0].type != JSMN_OBJECT) return 0;
+    if ((n != 13 && n != 15) || t[0].type != JSMN_OBJECT) return 0;
     size_t p=0;
     while(p<bytes && whitespace(json[p]))p++;
     if(p!=(size_t)t[0].start || json[p++]!='{')return 0;
@@ -337,8 +353,33 @@ static int policy(const char *kind, const char *protocol, const void *data, size
                 json_field(reply, tokens, count, "request_id", matched_id, sizeof(matched_id)) && !strcmp(matched_id, request_id) &&
                 json_field(reply, tokens, count, "decision", decision, sizeof(decision)) &&
                 json_field(reply, tokens, count, "action", requested_action, sizeof(requested_action))) {
-                if (!strcmp(decision, "allow") && !strcmp(requested_action, "none")) action = 0;
-                else if (!strcmp(decision, "deny")) {
+                if (!strcmp(decision, "allow") && !strcmp(requested_action, "none")) {
+                    if (count == 13) {
+                        if (strcmp(reason, "HISTORICAL_BLOCK_SCRUBBED") &&
+                            strcmp(reason, "REDACTED_SENSITIVE_CONTENT")) action = 0;
+                    } else {
+                        /* Only the serialized model body supplied to this call can be
+                         * replaced. Never change an address, allocation or length
+                         * descriptor. Stage the full frame before touching the body. */
+                        char format[32];
+                        uint32_t clean_length = 0;
+                        if (!strcmp(kind, "model.request") && bytes &&
+                            json_field(reply, tokens, count, "wire_replacement", format, sizeof(format)) &&
+                            !strcmp(format, "equal-length-v1") &&
+                            io(pipe, &clean_length, 4, 0, deadline) && clean_length == bytes &&
+                            buffer_accessible(data, bytes, 1)) {
+                            void *clean = HeapAlloc(GetProcessHeap(), 0, clean_length);
+                            if (clean) {
+                                if (io(pipe, clean, clean_length, 0, deadline) &&
+                                    GetTickCount64() < deadline) {
+                                    memcpy((void *)data, clean, bytes);
+                                    action = 0;
+                                }
+                                HeapFree(GetProcessHeap(), 0, clean);
+                            }
+                        }
+                    }
+                } else if (count == 13 && !strcmp(decision, "deny")) {
                     if (!strcmp(requested_action, "block_request")) action = 1;
                     else if (!strcmp(requested_action, "block_session")) action = 2;
                     else if (!strcmp(requested_action, "terminate_process")) action = 3;
@@ -487,6 +528,81 @@ static void *wss_gate(void *result, void *request) {
     return returned;
 }
 
+typedef BOOL (WINAPI *CreateProcessWFn)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES,
+                                       LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID,
+                                       LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+static CreateProcessWFn original_create_process;
+static _Thread_local int inside_exec_gate;
+
+static char *utf8_of(LPCWSTR text, int *bytes) {
+    *bytes = 0;
+    if (!text) return NULL;
+    int needed = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
+    if (needed <= 0) return NULL;
+    char *out = HeapAlloc(GetProcessHeap(), 0, (size_t)needed);
+    if (!out) return NULL;
+    if (WideCharToMultiByte(CP_UTF8, 0, text, -1, out, needed, NULL, NULL) != needed) {
+        HeapFree(GetProcessHeap(), 0, out);
+        return NULL;
+    }
+    *bytes = needed - 1;
+    return out;
+}
+
+/* Returns 0 to allow the process creation, non-zero to deny it. */
+static int tool_exec_policy(LPCWSTR application, LPCWSTR command, LPCWSTR directory) {
+    int app_bytes, cmd_bytes, dir_bytes, action = 1;
+    char *app = utf8_of(application, &app_bytes);
+    char *cmd = utf8_of(command, &cmd_bytes);
+    char *dir = utf8_of(directory, &dir_bytes);
+    size_t capacity = ((size_t)app_bytes + cmd_bytes + dir_bytes) * 6 + 128;
+    char *payload = HeapAlloc(GetProcessHeap(), 0, capacity);
+    if (payload && (!application || app) && (!command || cmd) && (!directory || dir)) {
+        static const char k1[] = "{\"application\":", k2[] = ",\"command_line\":",
+                          k3[] = ",\"cwd\":";
+        size_t n = 0;
+        memcpy(payload + n, k1, sizeof(k1) - 1); n += sizeof(k1) - 1;
+        n += quote(payload + n, (const unsigned char *)(app ? app : ""), (size_t)app_bytes);
+        memcpy(payload + n, k2, sizeof(k2) - 1); n += sizeof(k2) - 1;
+        n += quote(payload + n, (const unsigned char *)(cmd ? cmd : ""), (size_t)cmd_bytes);
+        memcpy(payload + n, k3, sizeof(k3) - 1); n += sizeof(k3) - 1;
+        n += quote(payload + n, (const unsigned char *)(dir ? dir : ""), (size_t)dir_bytes);
+        payload[n++] = '}'; payload[n] = 0;
+        action = policy("tool.exec", "process", payload, n);
+    }
+    if (payload) HeapFree(GetProcessHeap(), 0, payload);
+    if (app) HeapFree(GetProcessHeap(), 0, app);
+    if (cmd) HeapFree(GetProcessHeap(), 0, cmd);
+    if (dir) HeapFree(GetProcessHeap(), 0, dir);
+    return action;
+}
+
+static BOOL WINAPI create_process_gate(LPCWSTR application, LPWSTR command,
+                                       LPSECURITY_ATTRIBUTES process_attributes,
+                                       LPSECURITY_ATTRIBUTES thread_attributes,
+                                       BOOL inherit, DWORD flags, LPVOID environment,
+                                       LPCWSTR directory, LPSTARTUPINFOW startup,
+                                       LPPROCESS_INFORMATION information) {
+    if (inside_exec_gate)
+        return original_create_process(application, command, process_attributes,
+                                       thread_attributes, inherit, flags, environment,
+                                       directory, startup, information);
+    int lease = lease_state();
+    int action = 1; /* LEASE_LOST: no controller to ask, deny. */
+    if (lease == LEASE_STOPPED) action = 0;
+    else if (lease == LEASE_ACTIVE) {
+        inside_exec_gate = 1;
+        action = tool_exec_policy(application, command, directory);
+        inside_exec_gate = 0;
+    }
+    if (!action)
+        return original_create_process(application, command, process_attributes,
+                                       thread_attributes, inherit, flags, environment,
+                                       directory, startup, information);
+    SetLastError(ERROR_ACCESS_DENIED);
+    return FALSE;
+}
+
 static DWORD WINAPI initialize(LPVOID unused) {
     (void)unused;
     FILETIME created, exited, kernel, user;
@@ -539,6 +655,8 @@ static DWORD WINAPI initialize(LPVOID unused) {
         || MH_CreateHook(base + API_ERROR_MAP_RVA, api_error_map_gate,
                          (LPVOID *)&original_api_error_map) != MH_OK
 #endif
+        || MH_CreateHookApi(L"kernelbase", "CreateProcessW", create_process_gate,
+                            (LPVOID *)&original_create_process) != MH_OK
         ) {
         MH_Uninitialize(); return 5;
     }

@@ -1,11 +1,36 @@
 #!/usr/bin/env bash
-# One-click Codex desktop guard (Windows, Git Bash).
-#   ./start.sh            start in this window (Ctrl+C to stop)
-#   ./start.sh install    start in background and at every logon
+# Unified Codex desktop + fixed Claude CLI guard (Windows, Git Bash).
+#   ./start.sh            hidden supervisors + persistent independent monitor
+#   ./start.sh start --claude-live-test   explicit fixed-version limited test
+#   ./start.sh install    logon startup only after full acceptance
 #   ./start.sh status | stop | uninstall
+#   ./start.sh codex ...         previous single-client commands
+#   ./start.sh claude hook       fixed-version in-process Hook route
+#   ./start.sh claude proxy ...  explicit local model proxy route
 set -euo pipefail
 cd "$(dirname "$0")"
-command -v uv >/dev/null || { echo "需要先安装 uv: https://docs.astral.sh/uv/getting-started/installation/"; exit 1; }
-uv sync --locked --inexact --extra native-build --quiet
+extras=(--extra native-build)
+case "${1:-}" in
+  codex)
+    shift
+    launcher=scripts/desktop_guard.py
+    ;;
+  claude)
+    shift
+    launcher=scripts/claude_guard.py
+    case "${1:-}" in
+      hook) shift ;;
+      proxy)
+        shift
+        extras+=(--extra claude-proxy)
+        launcher=scripts/claude_model_proxy.py
+        ;;
+    esac
+    ;;
+  *) exec ./guard-service.bat "$@" ;;
+esac
+
+command -v uv >/dev/null || { echo "请安装 uv 后重试。" >&2; exit 1; }
+uv sync --locked --inexact "${extras[@]}" --quiet
 export PYTHONUTF8=1
-exec uv run --no-sync python scripts/desktop_guard.py "${@:-start}"
+exec uv run --no-sync python "$launcher" "$@"

@@ -136,6 +136,9 @@ class ToolPolicy:
     def inspect(self, tool_name: str, leaves: Iterable[str]) -> list[Finding]:
         findings: dict[str, Finding] = {}
         texts = [leaf for leaf in leaves if isinstance(leaf, str) and leaf]
+        # Desktop code-mode wraps the command in a JS string literal, so its
+        # quotes arrive as \" and would hide a path's right boundary.
+        texts += [plain for plain in map(_unescaped, texts) if plain not in texts]
         joined = "\n".join(texts)
         for pattern in self._protected:
             if pattern.search(joined):
@@ -152,6 +155,18 @@ class ToolPolicy:
             for rule in self._egress(joined):
                 findings[rule] = ("NETWORK_EGRESS", rule, 0.60)
         return list(findings.values())
+
+    def transfer_intent(self, command: str) -> bool:
+        """Whether a command sends data out of the process, whatever the host.
+
+        Used with a content finding: uploading a sensitive file is denied even
+        to a loopback or allow-listed host, which `_egress` would not flag.
+        """
+        command = "\n".join({command, _unescaped(command)})
+        return bool((_HTTP_TOOLS.search(command) and _HTTP_UPLOAD.search(command))
+                    or _TRANSFER_TOOLS.search(command) or _EGRESS_APIS.search(command)
+                    or _MAIL.search(command) or _PUBLISH.search(command)
+                    or re.search(r"(?i)\bgit\s+push\b", command))
 
     def _egress(self, command: str) -> list[str]:
         """Flag data leaving for a foreign destination, not every network use.
@@ -184,6 +199,11 @@ class ToolPolicy:
         if _EXPLICIT_GIT_PUSH.search(command) and foreign:
             rules.append("EGRESS_GIT_PUSH_URL")
         return rules
+
+
+def _unescaped(text: str) -> str:
+    """Undo one level of JS/JSON string escaping for quotes and backslashes."""
+    return re.sub(r"\\([\"'\\])", r"\1", text)
 
 
 def _is_shell(tool_name: str) -> bool:

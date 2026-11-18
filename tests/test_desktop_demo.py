@@ -1,6 +1,7 @@
 """Live controller preflight stays fail closed without touching a live PID."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -78,7 +79,16 @@ def _artifacts(tmp_path: Path, monkeypatch):
     return backend, dll, report_path, manifest, report
 
 
+def _pin_fixture_controller(monkeypatch):
+    # Synthetic reports bind these exact sources. Production constants still
+    # describe the historical lab build, whose receipts are local-only.
+    monkeypatch.setattr(demo, "GRACEFUL_CONTROLLER_SOURCES", {
+        name: demo._hash(demo.ROOT / name) for name in demo.GRACEFUL_CONTROLLER_SOURCES
+    })
+
+
 def _graceful_artifacts(tmp_path: Path, monkeypatch):
+    _pin_fixture_controller(monkeypatch)
     backend, dll = tmp_path / "codex.exe", tmp_path / "graceful.dll"
     backend.write_bytes(b"synthetic pinned backend")
     dll.write_bytes(b"synthetic graceful DLL")
@@ -171,6 +181,7 @@ def _graceful_artifacts(tmp_path: Path, monkeypatch):
 
 
 def _lease_artifacts(tmp_path: Path, monkeypatch):
+    _pin_fixture_controller(monkeypatch)
     backend, dll = tmp_path / "codex.exe", tmp_path / "lease.dll"
     backend.write_bytes(b"synthetic pinned backend")
     dll.write_bytes(b"synthetic lease DLL")
@@ -308,11 +319,104 @@ def _lease_artifacts(tmp_path: Path, monkeypatch):
     return backend, dll, report_path, repeat_path, large_path, manifest, report, repeat, large
 
 
-def _nonretry_artifacts():
-    dll = demo.DEFAULT_NONRETRY_DLL
-    report = demo.DEFAULT_NONRETRY_REPORT
-    backend = Path(json.loads((dll.parent / "build-manifest.json").read_text(
-        encoding="utf-8"))["backend"]["path"])
+@pytest.fixture
+def nonretry_artifacts(tmp_path, monkeypatch):
+    """Ten local, synthetic records for exercising the report verifier."""
+    backend, dll, _, _, _, manifest, lease, small, large = _lease_artifacts(
+        tmp_path, monkeypatch)
+    evidence_root = tmp_path / "synthetic-evidence"
+    monkeypatch.setattr(demo, "NONRETRY_EVIDENCE_ROOT", evidence_root)
+    dll_sha = demo._hash(dll)
+    monkeypatch.setattr(demo, "NONRETRY_DLL_SHA256", dll_sha)
+    manifest.update(schema=demo.NONRETRY_BUILD_SCHEMA,
+                    status="unvalidated_nonretry_candidate_not_desktop_adapter",
+                    pins=demo.NONRETRY_PINS, abi=demo.NONRETRY_ABI)
+    manifest_path = tmp_path / "build-manifest.json"
+
+    def receipt(path, record):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return {"path": str(path), "sha256": demo._hash(path)}
+
+    manifest_ref = receipt(manifest_path, manifest)
+    monkeypatch.setattr(demo, "NONRETRY_MANIFEST_SHA256", manifest_ref["sha256"])
+    evidence = {}
+
+    def record(name, data, **facts):
+        path = evidence_root / demo.NONRETRY_EVIDENCE[name]
+        evidence[name] = {**receipt(path, data), **facts}
+
+    for row in lease["results"]:
+        record(f"lease_{row['transport']}-{row['loss']}", row)
+
+    # Two distinct denied submissions and their allowed follow-ups, with
+    # hashes derived from synthetic bytes, plus the matching source receipts.
+    for row in small["results"] + large["results"]:
+        transport = row["transport"]
+        size = 950001 if row["large_multi_item"] else 1000
+        requests = []
+        origin = []
+        trace = []
+        for n in (1, 2):
+            denied = bytes([n]) * size
+            allowed = f"synthetic allowed {n}".encode()
+            for body, blocked in ((denied, True), (allowed, False)):
+                matched = {"bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+                requests.append({**matched, "denied_marker": blocked, "allowed_marker": not blocked,
+                                 "decision": "deny" if blocked else "allow",
+                                 "action": "BLOCK" if blocked else "ALLOW",
+                                 "protocol": transport, "archive_readback_exact": True})
+                if blocked:
+                    trace.append(matched)
+                else:
+                    origin.append({**matched, "complete": True, "target": False,
+                                   "http_body_bytes_received": len(body)})
+        row.update(pipe_requests=requests, target_trace=trace, origin=origin)
+        kind = "large" if row["large_multi_item"] else "small"
+        record(f"deep_{transport}-{kind}", row, denied_requests_for_two_turns=2,
+               denied_body_bytes=[size, size])
+
+    for index, transport in enumerate(("http", "wss")):
+        key = "api_error_build_tag" if transport == "http" else "wss_denied_tag"
+        input_tag = demo.NONRETRY_ABI[key]
+        output_tag = str(0x8000000000000012)
+        record(f"mapper_{transport}", {
+            "synthetic_only": True, "local_origin_only": True,
+            "candidate_map_rva": demo.NONRETRY_PINS["api_error_map"]["rva"],
+            "events": [{"where": "api_error_map_entry", "tag": str(input_tag)},
+                       {"where": "api_error_map_return", "output_tag": output_tag}],
+            "completions": [{"status": "failed"}, {"status": "failed"}],
+            "lease_result": {**lease["results"][index],
+                             "identity": {"pid": 301 + index, "creation_filetime": 401 + index}},
+        }, input_tag=input_tag, output_tag=output_tag)
+
+    success = copy.deepcopy(small["results"][0])
+    success["identity"].update(pid=303, creation_filetime=403)
+    success.update(followup_turn_completion={"status": "completed"},
+                   repeat_followup_turn_completion={"status": "completed"})
+    retry_config = {"request_max_retries": 2, "stream_max_retries": 2}
+    controller = dict(demo.GRACEFUL_CONTROLLER_SOURCES)
+    lease_sha = lease["controller_lease_class_sha256"]
+    sources = {**controller, "controller_lease_class": lease_sha,
+               "guard.c": demo._hash(demo.ROOT / "native/guard/guard.c")}
+    record("successful_http_followup", {
+        "schema": "transpect.guard.nonretry-success-http-lab/1.0", "validated": True,
+        "synthetic_only": True, "local_origin_only": True, "live_desktop_injected": False,
+        "retry_config": retry_config, "source_sha256_before": sources, "source_sha256_after": sources,
+        "report": success,
+    }, denied_requests_for_two_turns=2, completed_benign_turns=2)
+    report = tmp_path / "nonretry-summary.json"
+    summary = receipt(report, {
+        "schema": demo.NONRETRY_VALIDATION_SCHEMA, "validated": True,
+        "production_desktop_coverage_validated": False, "live_desktop_injected": False,
+        "backend": manifest["backend"], "dll": manifest["artifact"], "build_manifest": manifest_ref,
+        "source_sha256_at_build_and_summary": manifest["sources_sha256"],
+        "controller_implementation_sha256_at_summary": controller,
+        "controller_lease_class_sha256_at_summary": lease_sha, "retry_config": retry_config,
+        "denied_turns_per_deep_case": 2, "mapper_output": "CodexErr::InvalidPrompt (0x8000000000000012)",
+        "evidence": evidence,
+    })
+    monkeypatch.setattr(demo, "NONRETRY_REPORT_SHA256", summary["sha256"])
     return backend, dll, report
 
 
@@ -529,7 +633,11 @@ def test_lease_run_attests_disable_before_closing_pipe(
     monkeypatch.setattr(demo, "_BackendProcess", FakeProcess)
     monkeypatch.setattr(demo, "_ControllerLease", FakeLease)
     monkeypatch.setattr(demo, "PipeServer", FakePipe)
+    repeat, large = tmp_path / "repeat.json", tmp_path / "large.json"
+    for path in (repeat, large):
+        path.write_text("{}", encoding="utf-8")
     result = demo.run(1234, tmp_path / "output", guard=guard,
+                      repeat_report=repeat, large_report=large,
                       protect_thread_id="01a1b9f0-f1d8-7f82-af4e-2e437f6c605a",
                       seconds=seconds)
     assert result["state"] == "stopped"
@@ -676,8 +784,8 @@ def test_lease_status_attests_disabled_hooks_but_never_claims_coverage(
     assert result["model_egress_status"] == demo.MODEL_NOT_COVERED
 
 
-def test_nonretry_gate_accepts_exact_ten_isolated_reports():
-    backend, dll, report = _nonretry_artifacts()
+def test_nonretry_gate_accepts_exact_ten_isolated_reports(nonretry_artifacts):
+    backend, dll, report = nonretry_artifacts
     result = demo._nonretry_lease_lab_artifacts(backend, dll, report)
     assert result["synthetic_cases_validated"] == 10
     assert result["no_retry_attested_in_lab"] is True
@@ -687,15 +795,15 @@ def test_nonretry_gate_accepts_exact_ten_isolated_reports():
 
 @pytest.mark.parametrize("pin", ["NONRETRY_DLL_SHA256", "NONRETRY_MANIFEST_SHA256",
                                   "NONRETRY_REPORT_SHA256"])
-def test_nonretry_gate_rejects_exact_hash_drift(monkeypatch, pin):
-    backend, dll, report = _nonretry_artifacts()
+def test_nonretry_gate_rejects_exact_hash_drift(monkeypatch, pin, nonretry_artifacts):
+    backend, dll, report = nonretry_artifacts
     monkeypatch.setattr(demo, pin, "0" * 64)
     with pytest.raises(ValueError, match="exact SHA pins"):
         demo._nonretry_lease_lab_artifacts(backend, dll, report)
 
 
-def test_nonretry_gate_rejects_native_source_drift(monkeypatch):
-    backend, dll, report = _nonretry_artifacts()
+def test_nonretry_gate_rejects_native_source_drift(monkeypatch, nonretry_artifacts):
+    backend, dll, report = nonretry_artifacts
     original_hash = demo._hash
     source = demo.ROOT / "native/guard/guard.c"
     monkeypatch.setattr(demo, "_hash", lambda path: (
@@ -704,8 +812,8 @@ def test_nonretry_gate_rejects_native_source_drift(monkeypatch):
         demo._nonretry_lease_lab_artifacts(backend, dll, report)
 
 
-def test_nonretry_gate_rejects_evidence_file_hash_drift(monkeypatch):
-    backend, dll, report = _nonretry_artifacts()
+def test_nonretry_gate_rejects_evidence_file_hash_drift(monkeypatch, nonretry_artifacts):
+    backend, dll, report = nonretry_artifacts
     original_hash = demo._hash
     target = demo.NONRETRY_EVIDENCE_ROOT / demo.NONRETRY_EVIDENCE["deep_http-small"]
     monkeypatch.setattr(demo, "_hash", lambda path: (
@@ -724,8 +832,8 @@ def test_nonretry_gate_rejects_evidence_file_hash_drift(monkeypatch):
      "successful benign HTTP follow-up"),
 ])
 def test_nonretry_gate_rejects_semantic_evidence_drift(
-        monkeypatch, evidence_key, mutate, message):
-    backend, dll, report = _nonretry_artifacts()
+        monkeypatch, evidence_key, mutate, message, nonretry_artifacts):
+    backend, dll, report = nonretry_artifacts
     target = demo.NONRETRY_EVIDENCE_ROOT / demo.NONRETRY_EVIDENCE[evidence_key]
     original_json = demo._json
 
@@ -740,12 +848,12 @@ def test_nonretry_gate_rejects_semantic_evidence_drift(
         demo._nonretry_lease_lab_artifacts(backend, dll, report)
 
 
-def test_nonretry_status_accepts_lab_but_stays_paused(monkeypatch):
-    backend, _dll, _report = _nonretry_artifacts()
+def test_nonretry_status_accepts_lab_but_stays_paused(monkeypatch, nonretry_artifacts):
+    backend, dll, report = nonretry_artifacts
     monkeypatch.setattr(demo, "_subject", lambda _pid: _subject(backend))
     monkeypatch.setattr(demo, "_resident_guard", lambda _pid: False)
     monkeypatch.setattr(demo, "_command_hooks_present", lambda: False)
-    result = demo.status(1234, guard="nonretry_lease")
+    result = demo.status(1234, guard="nonretry_lease", dll=dll, lab_report=report)
     assert result["synthetic_native_lab_validated"] is True
     assert result["lab_gate"]["synthetic_cases_validated"] == 10
     assert result["trial_prerequisites_met"] is True

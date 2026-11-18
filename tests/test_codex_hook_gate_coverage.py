@@ -1,5 +1,6 @@
 """Coverage the gate gained: tool outputs, tool-call adversarial inputs, tool
 policy, REVIEW approvals, audit rotation and the fail-closed entry paths."""
+import hashlib
 import io
 import json
 import os
@@ -57,7 +58,7 @@ def _tool(command, name="PreToolUse", tool="Bash", **fields):
     (f"{SLACK}", "SLACK_TOKEN"),
     (f"{GOOGLE}", "GOOGLE_API_KEY"),
     ("LTAI5tQ2mL7vR4tB8nZ9", "ALIYUN_ACCESS_KEY"),
-    ("sk-0123456789abcdef0123456789abcdef", "SK_API_KEY"),
+    ("sk-" + hashlib.sha256(b"synthetic vendor credential").hexdigest()[:32], "SK_API_KEY"),
     (f"mysql://root:{PASSWORD}@10.0.0.1/db", "URL_PASSWORD"),
     ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
      "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "JWT"),
@@ -85,7 +86,7 @@ def test_templates_and_developer_text_do_not_deny(text):
 
 
 @pytest.mark.parametrize("text", [
-    "AKIA\u200bIOSFODNN7EXAMPLE",               # zero-width space inside the key
+    "AKIA\u200bIOSFODNN7EXAMPLF",              # non-public synthetic key; not AWS's exact example
     f"password\uff1d{PASSWORD}",               # full-width equals sign
     f'export GITHUB_TOKEN=\\"{PASSWORD}\\"',    # backslash-escaped quotes
     f"$env:API_KEY = `\"{PASSWORD}`\"",         # PowerShell backtick escapes
@@ -98,7 +99,7 @@ def test_normalization_defeats_invisible_and_escape_splitting(text):
 
 
 def test_normalized_findings_keep_their_plain_rule_id():
-    verdict = ContentDLPEngine().inspect_text("AKIA\u200bIOSFODNN7EXAMPLE")
+    verdict = ContentDLPEngine().inspect_text("AKIA\u200bIOSFODNN7EXAMPLF")
     assert "AWS_ACCESS_KEY" in verdict.rule_ids
     assert not any(rule.endswith("_DECODED") for rule in verdict.rule_ids)
 
@@ -125,7 +126,7 @@ def test_chinese_name_address_and_phone_combine_into_a_denial():
     {"command": ["bash", "-lc", f"echo {GITHUB}"]},
     {"query": "select 1", "options": {"nested": [{"api_key": f"{OPENAI}"}]}},
     {f"password={PASSWORD}": "value in a key"},
-    {"command": "AKIA\u200bIOSFODNN7EXAMPLE"},
+    {"command": "AKIA\u200bIOSFODNN7EXAMPLF"},
     {"command": "echo cGFzc3dvcmQ9WnE4TG0yVng5UnQ0S3A2V24z | base64 -d"},
 ])
 def test_secret_in_any_tool_argument_shape_is_denied(tmp_path, tool_input):

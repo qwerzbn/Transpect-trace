@@ -4,7 +4,8 @@
   "package_full_name": "OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0",
   "backend": {
     "version": "codex-cli 0.167.0-alpha.3.2",
-    "sha256": "40ecc3d8b6899afd8f935a8cccb7d53ba41ffd7c199f679e186d30ddd0d0bf39"
+    "sha256": "40ecc3d8b6899afd8f935a8cccb7d53ba41ffd7c199f679e186d30ddd0d0bf39",
+    "code_sha256": "583ed1f42412daf9ac61a74788f077bfe8d178a1f4acd6a39bdd4e171fa6ba4f"
   },
   "hooks": {
     "http": {"rva": "0xab2d670", "prefix_hex": "5541574156415541545657534881ec28"},

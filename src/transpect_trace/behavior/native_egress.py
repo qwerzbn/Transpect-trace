@@ -26,7 +26,8 @@ from transpect_trace.guard.pipe import pipe_security, windows_api
 MAGIC = 0x31474554
 REQUEST = struct.Struct("<IIIIQ32sIIQII16siIQ")
 RESPONSE = struct.Struct("<IIIIQ")
-REGISTER, READY, CHILD, CONNECT, RESULT, HELD, HEARTBEAT = range(1, 8)
+REGISTER, READY, CHILD, CONNECT, RESULT, HELD, HEARTBEAT, SEND = range(1, 9)
+HOOK_MASK = 0xffff
 
 
 def descendant_pipe_security(k, restricted_sids=()):
@@ -138,10 +139,11 @@ def normalize_policy(policy: dict) -> dict:
         port = row["port"]
         if isinstance(port, bool) or not isinstance(port, int) or not 0 < port <= 65535:
             raise ValueError("target port must be 1..65535")
-        if row.get("protocol", "tcp") != "tcp" or row.get("action", "block") not in {"allow", "block"}:
-            raise ValueError("only explicit TCP allow/block targets are supported")
-        target = {"address": str(address), "port": port, "action": row.get("action", "block"), "protocol": "tcp"}
-        if any(x["address"] == target["address"] and x["port"] == port for x in targets):
+        protocol = row.get("protocol", "tcp")
+        if protocol not in {"tcp", "udp"} or row.get("action", "block") not in {"allow", "block"}:
+            raise ValueError("only explicit TCP/UDP allow/block targets are supported")
+        target = {"address": str(address), "port": port, "action": row.get("action", "block"), "protocol": protocol}
+        if any(x["address"] == target["address"] and x["port"] == port and x["protocol"] == protocol for x in targets):
             raise ValueError("duplicate target")
         targets.append(target)
     hashes = policy.get("allowed_image_hashes", [])
@@ -150,9 +152,11 @@ def normalize_policy(policy: dict) -> dict:
     return {"default_action": policy.get("default_action", "allow"), "targets": targets, "allowed_image_hashes": hashes}
 
 
-def destination_decision(policy: dict, address: str, port: int) -> str:
+def destination_decision(policy: dict, address: str, port: int, protocol: str = "tcp") -> str:
+    if protocol not in {"tcp", "udp"}:
+        return "block"
     normalized = str(normalized_address(address))
-    return next((row["action"] for row in policy["targets"] if row["address"] == normalized and row["port"] == port), policy["default_action"])
+    return next((row["action"] for row in policy["targets"] if row["address"] == normalized and row["port"] == port and row["protocol"] == protocol), policy["default_action"])
 
 
 def normalized_address(address):
@@ -350,7 +354,7 @@ class EgressController:
         self.held_candidates: dict[tuple[int, int], dict] = {}
         self.records = []
         self.errors = []
-        self.state = {"schema": "transpect.native.egress.status/1.0", "run_id": self.run_id, "state": "not_started", "can_enforce": False, "scope": "explicitly_enrolled_descendants_tcp", "root_network_filtered": False, "uncovered": ["UDP", "QUIC", "existing connections", "custom network stacks", "unverified process creation paths", "administrator bypass"]}
+        self.state = {"schema": "transpect.native.egress.status/1.0", "run_id": self.run_id, "state": "not_started", "can_enforce": False, "scope": "explicitly_enrolled_descendants_standard_socket_apis", "root_network_filtered": False, "uncovered": ["direct syscalls/custom network stacks", "previously acquired unhooked provider/RIO tables", "loader/TLS callbacks before initialization", "unverified process creation paths", "administrator bypass"]}
         self.k = None
         self.security = None
         self.child_security = []
@@ -453,7 +457,7 @@ class EgressController:
         if not member["registered"]:
             return False, 3
         if kind == READY:
-            if flags != 0x0f:
+            if flags != HOOK_MASK:
                 return False, 4
             member["ready"] = True
             self._record({"kind": "process.ready", "subject": dict(member), "hook_mask": flags})
@@ -528,15 +532,17 @@ class EgressController:
             self.state['held_processes'] = self._held_processes()
             self._persist()
             return True, 0
-        if kind == CONNECT:
-            if member["root"] or family not in (4, 6) or not 0 < port <= 65535:
+        if kind in (CONNECT, SEND):
+            if member["root"] or family not in (4, 6) or not 0 < port <= 65535 or flags not in (6, 17):
                 return False, 9
             address = str(ipaddress.ip_address(packed_address[:4] if family == 4 else packed_address))
-            action = destination_decision(self.policy, address, port)
-            self._record({"kind": "connection.decision", "pid": pid, "creation_filetime": created, "attempt_id": sequence, "destination_address": address, "destination_port": port, "protocol": "tcp", "decision": action, "execution": "pending"})
+            protocol = "tcp" if flags == 6 else "udp"
+            action = destination_decision(self.policy, address, port, protocol)
+            self._record({"kind": "connection.decision", "operation": "send" if kind == SEND else "connect", "pid": pid, "creation_filetime": created, "attempt_id": sequence, "destination_address": address, "destination_port": port, "protocol": protocol, "decision": action, "execution": "pending"})
             return action == "allow", 0 if action == "allow" else 10
         if kind == RESULT:
-            self._record({"kind": "connection.rejected", "pid": pid, "creation_filetime": created, "attempt_id": child_created, "native_result": result, "winsock_error": error, "evidence": "native_failure_return_before_original_connect"})
+            operation = "send" if flags == SEND else "connect"
+            self._record({"kind": "connection.rejected", "operation": operation, "pid": pid, "creation_filetime": created, "attempt_id": child_created, "native_result": result, "winsock_error": error, "evidence": f"native_failure_return_before_original_{operation}"})
             return True, 0
         return False, 11
 
@@ -616,7 +622,12 @@ class EgressController:
                     # heartbeat. Retire only a directly verified ended lifetime;
                     # a live/unknown failure still degrades the controller.
                     member = self.members.get(peer.value) if 'peer' in locals() else None
-                    if member and process_lifetime_ended(member['pid'], member['creation_filetime']):
+                    if self.stop.is_set():
+                        # close() intentionally aborts outstanding acknowledgments;
+                        # keep that shutdown evidence separate from a live fault.
+                        self._record({'kind': 'controller.communication_stopped',
+                                      'error_type': type(exc).__name__})
+                    elif member and process_lifetime_ended(member['pid'], member['creation_filetime']):
                         member['lifecycle'] = 'ended'
                         self._record({'kind':'process.communication_ended','pid':member['pid'],
                             'creation_filetime':member['creation_filetime'], 'error_type':type(exc).__name__})

@@ -52,16 +52,21 @@ def _decode_compressed_model_frame(frame: bytes) -> dict | None:
     if not raw.startswith(ZSTD_MAGIC):
         return None
     try:
-        reader = zstandard.ZstdDecompressor().stream_reader(
-            raw, read_across_frames=True)
-        decoded = reader.read(MAX_DECODED_BODY_BYTES + 1)
-        if len(decoded) > MAX_DECODED_BODY_BYTES or reader.read(1):
+        advertised = zstandard.frame_content_size(raw)
+        if advertised == 0 or advertised > MAX_DECODED_BODY_BYTES:
             return None
-        # The stream reader yields a truncated frame's prefix without error.
-        # A one-shot decode of the now-bounded size rejects truncation, and a
-        # mismatch rejects trailing concatenated frames.
-        if zstandard.ZstdDecompressor().decompress(
-                raw, max_output_size=max(len(decoded), 1)) != decoded:
+        if advertised < 0:
+            # Size-less frames need a bounded measurement before one-shot
+            # verification. A stream reader alone may yield a truncated prefix.
+            with zstandard.ZstdDecompressor().stream_reader(raw) as reader:
+                measured = len(reader.read(MAX_DECODED_BODY_BYTES + 1))
+                if not measured or measured > MAX_DECODED_BODY_BYTES or reader.read(1):
+                    return None
+        else:
+            measured = advertised
+        decoded = zstandard.ZstdDecompressor().decompress(
+            raw, max_output_size=measured, allow_extra_data=False)
+        if len(decoded) != measured:
             return None
         text = decoded.decode("utf-8")
     except (zstandard.ZstdError, UnicodeError):
@@ -191,6 +196,7 @@ def pipe_security(k, client_sid: str | None = None):
 
 
 class PipeServer:
+    desktop_history_wire = False
     def __init__(self,pid:int,engine:PolicyEngine,audit:Path,workers:int=4,request_tap=None,
                  client_sid:str|None=None, target_thread_id:str|None=None):
         self.pid,self.engine,self.audit,self.workers=pid,engine,audit,workers
@@ -261,12 +267,34 @@ class PipeServer:
         # inspection can overlap with another request; only this short audit
         # append needs the pipe's record lock. Other policy engines may carry
         # mutable session state and remain serialized.
+        def evaluate():
+            decision, row = self.engine.evaluate(request)
+            if self.desktop_history_wire and decision.redacted_payload is not None:
+                try:
+                    from .codex_history_wire import pack_history_zstd
+                    if request.kind != "model.request" or decision.decision != "allow":
+                        raise ValueError("unexpected replacement decision")
+                    clean = decision.redacted_payload.encode("utf-8")
+                    if len(clean) != len(request.payload_utf8.encode("utf-8")):
+                        raise ValueError("replacement size mismatch")
+                    if request._compressed_wire_length is not None:
+                        clean = pack_history_zstd(clean, request._compressed_wire_length,
+                                                  began / 1e9 + 1.9)
+                    decision._desktop_wire_body = clean
+                except (ValueError, TimeoutError, zstandard.ZstdError):
+                    decision = GuardDecision(request_id=request.request_id, decision="deny",
+                        action="block_request", reason="HISTORY_WIRE_REWRITE_FAILED",
+                        policy_version=decision.policy_version)
+                    if row is not None:
+                        row.update(decision="deny", action="block_request", reason=decision.reason)
+            return decision, row
+
         if getattr(self.engine, "concurrent_safe", False):
-            decision,row=self.engine.evaluate(request)
+            decision,row=evaluate()
             with self.lock:
                 return commit(decision,row)
         with self.lock:
-            decision,row=self.engine.evaluate(request)
+            decision,row=evaluate()
             return commit(decision,row)
 
     def scope_snapshot(self) -> dict[str, int]:
@@ -359,6 +387,7 @@ class PipeServer:
                 except ValidationError:
                     request = None
                 if request is not None:
+                    request._compressed_wire_length = decoded["compressed_bytes"]
                     with self.lock:
                         if not hasattr(self, "decoded_frames"):
                             self.decoded_frames = []
@@ -458,4 +487,9 @@ class PipeServer:
         if not any(t.is_alive() for t in self.threads):self.k.LocalFree(self.security.descriptor)
 
     def decision_frame(self,decision):
-        return encode_frame(decision.model_dump(by_alias=True))
+        wire = decision._desktop_wire_body
+        if wire is not None:
+            header = decision.model_dump(by_alias=True, exclude={"redacted_payload"})
+            header["wire_replacement"] = "equal-length-v1"
+            return encode_frame(header) + struct.pack("<I", len(wire)) + wire
+        return encode_frame(decision.model_dump(by_alias=True, exclude_none=True))

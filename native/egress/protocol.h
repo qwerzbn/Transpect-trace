@@ -11,6 +11,8 @@
 #define EGRESS_RESULT 5u
 #define EGRESS_HELD 6u
 #define EGRESS_HEARTBEAT 7u
+#define EGRESS_SEND 8u
+#define EGRESS_HOOK_MASK 0xffffu
 #pragma pack(push, 1)
 typedef struct {
     uint32_t magic, version, kind, pid;

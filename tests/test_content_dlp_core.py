@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 import base64
+import runpy
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from transpect_trace.protect.codex_hook_gate import CodexHookGate, GateConfig
 from transpect_trace.protect.content_dlp import ContentDLPEngine, EDMIndex, FingerprintIndex
+
+_PROMPTS = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts" / "prep_dlp_workspace.py"))
+A, B = _PROMPTS["A"], _PROMPTS["B"]
 
 
 SECRET = "Ab3x7Q2m9Pv4Na6Ty8Rz0Ls5Kb1Dc3Fh"
@@ -87,6 +94,18 @@ def test_encoded_secret_validators_and_hard_negatives():
     assert ContentDLPEngine(index=_index()).inspect_text("The team will review future steps together.").decision == "ALLOW"
 
 
+def test_entropy_candidate_does_not_supply_its_own_token_context():
+    engine = ContentDLPEngine()
+    slug = "02-direct-token-" + SECRET
+    memory_path = "Claude memory at C:\\Users\\demo\\.claude\\projects\\" + slug + "\\memory\\"
+    path_verdict = engine.inspect_text(memory_path)
+    assert "ENTROPY_TOKEN_CONTEXT" not in path_verdict.rule_ids
+    assert path_verdict.decision != "BLOCK"
+    actual_credential = engine.inspect_text("deploy token " + SECRET)
+    assert actual_credential.decision == "BLOCK"
+    assert "ENTROPY_TOKEN_CONTEXT" in actual_credential.rule_ids
+
+
 def test_text_pdf_and_office_file_bytes():
     engine = ContentDLPEngine()
     assert engine.inspect_file_bytes("good.txt", b"Public release notes for the conference.").decision == "ALLOW"
@@ -158,6 +177,27 @@ def test_office_structural_attributes_do_not_become_content_tokens():
         b'guid="5C22544A-7EE6-4342-B048-85BDC9FD1C3A"/></root>',
     ))
     assert engine.inspect_file_bytes("public.xlsx", structural).decision == "ALLOW"
+
+
+@pytest.mark.parametrize("case,prompt", [*A.items(), *B.items()])
+def test_prompt_matrix_actionable_policy(case: str, prompt: str, tmp_path: Path):
+    gate = CodexHookGate(GateConfig("enforce", tmp_path / "archive", tmp_path / "audit.jsonl", None))
+    verdict = ContentDLPEngine().inspect_text(prompt)
+    action = gate.actionable(verdict)
+    expected = "ALLOW" if case.startswith("B") or case.startswith(("A06", "A16")) else "DENY"
+    assert ("ALLOW" if action == "ALLOW" else "DENY") == expected, (case, action, verdict.rule_ids)
+    if case.startswith(("A02", "A15")):
+        assert action == "BLOCK", case
+
+
+def test_public_aws_example_is_exact_and_split_token_needs_concat():
+    engine = ContentDLPEngine()
+    example = A["A06_terraform_aws"]
+    assert engine.inspect_text(example).decision == "ALLOW"
+    assert engine.inspect_text(example.replace("AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLF")).decision == "BLOCK"
+    split = A["A15_fragmented_token"]
+    assert "GITHUB_TOKEN_SPLIT" in engine.inspect_text(split).rule_ids
+    assert "GITHUB_TOKEN_SPLIT" not in engine.inspect_text(split.replace("token := a + b", "token := a")).rule_ids
 
 
 def test_edm_requires_fields_from_the_same_record():

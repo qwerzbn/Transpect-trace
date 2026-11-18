@@ -29,7 +29,7 @@ BENIGN = {"hook_event_name": "UserPromptSubmit", "session_id": "s", "turn_id": "
           "prompt": "请总结这段公开文档"}
 OUTPUT = {"hook_event_name": "PostToolUse", "session_id": "s", "turn_id": "t",
           "tool_use_id": "u", "tool_name": "Bash", "tool_input": {"command": "type a.txt"},
-          "tool_response": "token ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8\n"}
+          "tool_response": "token ghp_" + "aB3d4E" * 6 + "\n"}
 FIXTURE = ROOT / "tests" / "fixtures" / "codex_hooks" / "pinned-hook-schemas.json"
 TITLES = {"UserPromptSubmit": "user-prompt-submit.command.output",
           "PreToolUse": "pre-tool-use.command.output",

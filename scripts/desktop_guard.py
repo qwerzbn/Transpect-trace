@@ -99,7 +99,8 @@ def _supervisor_running() -> bool:
 
 
 def build() -> int:
-    pins = svc.load_pins()
+    # Repository pins plus those this machine derived automatically (tier 1).
+    pins = svc.load_pins(svc.PIN_DIR, svc.STATE_DIR / "pins")
     hashes = svc.ImageHashCache()
     built = 0
     for backend in svc.installed_backends():

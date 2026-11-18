@@ -62,6 +62,19 @@ def test_empty_pin_directory_is_rejected(tmp_path):
         svc.load_pins(tmp_path)
 
 
+@pytest.mark.parametrize("marker", [
+    {"status": "candidate_lab_only"},
+    {"production_ready": False},
+])
+def test_candidate_pin_cannot_be_loaded_by_supervisor(tmp_path, marker):
+    path = _pin(tmp_path, **marker)
+    with pytest.raises(ValueError, match="candidate pin cannot be loaded"):
+        svc.load_pins(tmp_path)
+    # Static pin validation remains available for a manual isolated build.
+    assert svc._validate_pin(json.loads(path.read_text(encoding="utf-8")), path)[
+        "codex_desktop_version"] == "26.1103.3517.0"
+
+
 def test_pe_read_and_backend_check(tmp_path):
     prefix = bytes.fromhex("5541574156415541545657534881ec28")
     image = _pe(tmp_path / "codex.exe", 0x2345, prefix)
@@ -86,7 +99,25 @@ def test_compile_defines_carry_every_pinned_value():
         assert pin["hooks"][name]["rva"] in defines
     assert "-DTTRACE_GRACEFUL_LEASE=1" in defines and "-DTTRACE_NONRETRY_DENY_LAB=1" in defines
     assert "-DWSS_SUCCESS_TAG=0x20" in defines and "-DWSS_DENIED_TAG=25" in defines
+    assert "-DAPI_ERROR_DENIED_TAG=25" in defines
     assert f'-DTTRACE_EXPECTED_HASH="{pin["backend"]["sha256"]}"' in defines
+
+
+def test_new_pin_can_select_a_verified_error_denial_tag(tmp_path):
+    old = next(iter(svc.load_pins().values()))
+    new_abi = {**old["abi"], "api_error_denied_tag": 29}
+    _pin(tmp_path, abi=new_abi)
+    pin = next(iter(svc.load_pins(tmp_path).values()))
+    assert pin["abi"]["api_error_denied_tag"] == 29
+    assert "-DAPI_ERROR_DENIED_TAG=29" in svc.compile_defines(pin)
+
+
+@pytest.mark.parametrize("invalid", ["29", -1, 0, 256, True])
+def test_invalid_error_denial_tag_is_rejected(tmp_path, invalid):
+    old = next(iter(svc.load_pins().values()))
+    _pin(tmp_path, abi={**old["abi"], "api_error_denied_tag": invalid})
+    with pytest.raises(ValueError, match="invalid desktop guard pin"):
+        svc.load_pins(tmp_path)
 
 
 def test_source_digest_ignores_line_endings(tmp_path):
@@ -191,9 +222,91 @@ def test_unsupported_backend_is_reported_not_attached(tmp_path, monkeypatch):
         "pid": pid, "creation_filetime": 9, "image_path": str(tmp_path / "codex.exe"),
         "command_line": r"C:\x\codex.exe app-server", "user_sid": "S-1-5-21-1"})
     monkeypatch.setattr(supervisor.hashes, "sha256", lambda path: "f" * 64)
+    monkeypatch.setattr(supervisor.hashes, "code_sha256", lambda path: "e" * 64)
+    monkeypatch.setattr(svc, "installed_packages", lambda: {})
     supervisor._consider(77)
     status = supervisor.backends[(77, 9)]
     assert status.state == "UNSUPPORTED_VERSION" and not supervisor.controllers
+    assert "代码与已验证版本不同" in status.detail
+    assert not list((tmp_path / "pins").glob("*.json"))
+
+
+def _signed_pe(path: Path, code: bytes, checksum: int, signature: bytes) -> Path:
+    """PE32+ with a .text payload, a CheckSum and a trailing certificate table."""
+    data = bytearray(0x400)
+    pe = 0x80
+    data[0x3C:0x40] = struct.pack("<I", pe)
+    data[pe:pe + 4] = b"PE\0\0"
+    struct.pack_into("<HH", data, pe + 4, 0x8664, 1)
+    struct.pack_into("<H", data, pe + 20, 0xF0)
+    optional = pe + 24
+    struct.pack_into("<H", data, optional, 0x20B)
+    struct.pack_into("<I", data, optional + 64, checksum)
+    body = bytes(data) + code
+    struct.pack_into("<II", data, optional + 112 + 32, len(body), len(signature))
+    path.write_bytes(bytes(data) + code + signature)
+    return path
+
+
+def test_code_digest_ignores_signature_and_checksum_only(tmp_path):
+    base = _signed_pe(tmp_path / "a.exe", b"\x90" * 64, 0x1111, b"SIG-A" * 10)
+    resigned = _signed_pe(tmp_path / "b.exe", b"\x90" * 64, 0x2222, b"SIG-B-LONGER" * 9)
+    patched = _signed_pe(tmp_path / "c.exe", b"\x90" * 63 + b"\xcc", 0x1111, b"SIG-A" * 10)
+    assert svc.file_sha256(base) != svc.file_sha256(resigned)
+    assert svc.code_sha256(base) == svc.code_sha256(resigned)
+    assert svc.code_sha256(base) != svc.code_sha256(patched)
+    with pytest.raises(ValueError, match="PE32"):
+        svc.code_sha256(_pe(tmp_path / "pe32.exe", 0x1000, b"\0" * 4))
+
+
+def test_repository_pin_carries_the_validated_code_digest():
+    pin = next(iter(svc.load_pins().values()))
+    assert pin["backend"]["code_sha256"] == (
+        "583ed1f42412daf9ac61a74788f077bfe8d178a1f4acd6a39bdd4e171fa6ba4f")
+
+
+def test_derived_pin_reuses_hooks_and_is_loaded_from_the_local_directory(tmp_path):
+    base = next(iter(svc.load_pins().values()))
+    local = tmp_path / "pins"
+    derived = svc.derive_pin(base, "a" * 64, base["backend"]["code_sha256"],
+                             "26.1103.4239.0", local, "OpenAI.Codex_26.1103.4239.0_x64__x")
+    assert derived["hooks"] == base["hooks"] and derived["abi"] == base["abi"]
+    assert derived["derived_from"]["method"] == "identical_code_resigned"
+    pins = svc.load_pins(svc.PIN_DIR, local)
+    assert pins["a" * 64]["codex_desktop_version"] == "26.1103.4239.0"
+    assert base["backend"]["sha256"] in pins
+    with pytest.raises(ValueError, match="code digest differs"):
+        svc.derive_pin(base, "b" * 64, "c" * 64, "x", local)
+
+
+def test_package_version_from_full_name():
+    assert svc.package_version("OpenAI.Codex_26.1103.4239.0_x64__2p2nqsd0c76g0") == "26.1103.4239.0"
+
+
+def test_adapt_known_resigned_and_changed_backends(tmp_path, monkeypatch):
+    lines = []
+    supervisor = svc.Supervisor(state_dir=tmp_path, log=lines.append)
+    base = next(iter(supervisor.pins.values()))
+    built = []
+    monkeypatch.setattr(svc, "ensure_dll", lambda pin, image: built.append(pin) or Path("g.dll"))
+    monkeypatch.setattr(svc, "installed_packages", lambda: {})
+    monkeypatch.setattr(supervisor, "_backup", lambda pin, image: None)
+    hashes = {"known.exe": (base["backend"]["sha256"], base["backend"]["code_sha256"]),
+              "resigned.exe": ("1" * 64, base["backend"]["code_sha256"]),
+              "changed.exe": ("2" * 64, "3" * 64)}
+    monkeypatch.setattr(supervisor.hashes, "sha256", lambda path: hashes[Path(path).name][0])
+    monkeypatch.setattr(supervisor.hashes, "code_sha256", lambda path: hashes[Path(path).name][1])
+
+    assert supervisor.adapt(Path("known.exe")) is base and lines == []
+    derived = supervisor.adapt(Path("resigned.exe"), "OpenAI.Codex_26.1103.4239.0_x64__x")
+    assert derived["codex_desktop_version"] == "26.1103.4239.0"
+    assert "已自动适配" in lines[-1] and "1" * 64 in supervisor.pins
+    assert supervisor.adapt(Path("changed.exe")) is None
+    assert [pin["backend"]["sha256"] for pin in built] == [base["backend"]["sha256"], "1" * 64]
+    # The derived pin survives a restart of the guard.
+    again = svc.Supervisor(state_dir=tmp_path, log=lambda message: None)
+    assert "1" * 64 in again.pins
+    assert "26.1103.4239.0" in again.state()["adapted_versions"]
 
 
 def test_other_users_and_exec_server_are_ignored(tmp_path, monkeypatch):
@@ -209,3 +322,21 @@ def test_other_users_and_exec_server_are_ignored(tmp_path, monkeypatch):
     supervisor._consider(2)
     supervisor._consider(3)
     assert supervisor.backends == {}
+
+
+def test_backup_keeps_the_newest_three_supported_backends(tmp_path):
+    supervisor = svc.Supervisor(state_dir=tmp_path / "state", log=lambda message: None)
+    base = next(iter(supervisor.pins.values()))
+    image = tmp_path / "codex.exe"
+    image.write_bytes(b"MZ backend")
+    for index in range(5):
+        pin = {**base, "codex_desktop_version": f"26.1.{index}",
+               "backend": {**base["backend"], "sha256": f"{index:x}" * 64}}
+        supervisor._backup(pin, image)
+        supervisor._backup(pin, image)  # a second call copies nothing new
+    kept = sorted(path.name for path in (tmp_path / "state" / "backends").iterdir())
+    assert len(kept) == 3
+    for name in kept:
+        folder = tmp_path / "state" / "backends" / name
+        assert (folder / "codex.exe").read_bytes() == b"MZ backend"
+        assert "_path" not in json.loads((folder / "pin.json").read_text(encoding="utf-8"))

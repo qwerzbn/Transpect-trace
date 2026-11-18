@@ -111,7 +111,8 @@ uv run --no-sync python scripts/probe_desktop_guard_failstop_current_lab.py --ba
 当前 PID `23212` 的只读状态检查显示 `live_guard_resident=true`、`native_hooks_disabled_attested=true`、`foreground_controller_active=false`、`ready_for_live_trial=false`。PID 和版本可能再次变化，检查时须重新核对。`status` 只读，不会加载 DLL：
 
 ```powershell
-$appServerPid = [int](Read-Host '已核对的当前桌面 app-server PID')
+$appServerPid = Read-Host '已核对的当前桌面 app-server PID'
+$appServerPid = [int] $appServerPid
 uv run --no-sync python scripts/desktop_demo.py status --pid $appServerPid
 ```
 

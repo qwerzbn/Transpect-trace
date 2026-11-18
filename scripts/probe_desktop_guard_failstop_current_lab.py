@@ -88,6 +88,22 @@ class _CountingHTTPHandler(socketserver.BaseRequestHandler):
             header, initial = bytes(wire).split(b"\r\n\r\n", 1)
             lines = header.decode("ascii", errors="strict").split("\r\n")
             first = lines[0].split(" ")
+            if getattr(peer, "observe_body", None):
+                with peer.lock:
+                    row.update(method=first[0], marker_in_header=peer.marker in header)
+                if len(first) == 3 and first[0] == "GET":
+                    body_headers = [h for h in lines[1:] if h.lower().startswith(
+                        ("content-length:", "transfer-encoding:"))]
+                    if initial or body_headers:
+                        raise ValueError("unexpected body on catalog request")
+                    path = first[1].split("?", 1)[0]
+                    if path != "/v1/models":
+                        raise ValueError("unexpected GET endpoint")
+                    with peer.lock:
+                        row.update(path="catalog", complete=True, framing_verified=True)
+                    self.request.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"
+                                         b"Connection: close\r\n\r\n")
+                    return
             if len(first) < 3 or first[0] != "POST":
                 raise ValueError("unexpected HTTP request method")
             lengths = [line.split(":", 1)[1].strip() for line in lines[1:]
@@ -111,11 +127,19 @@ class _CountingHTTPHandler(socketserver.BaseRequestHandler):
                 with peer.lock:
                     row["wire_bytes"] += len(chunk)
                     row["http_body_bytes_received"] = len(body)
+            observation = {}
+            if observe_body := getattr(peer, "observe_body", None):
+                if len(initial) > length or first[1].split("?", 1)[0] != "/v1/responses":
+                    raise ValueError("unexpected trailing bytes or model request target")
+                encodings = [line.split(":", 1)[1].strip().lower() for line in lines[1:]
+                             if line.lower().startswith("content-encoding:")]
+                observation = observe_body(bytes(body), encodings)
             with peer.lock:
                 row.update(complete=True, bytes=len(body),
                            sha256=hashlib.sha256(body).hexdigest(),
                            target=peer.marker in body,
                            body_complete_perf_ns=time.perf_counter_ns())
+                row.update(observation)
             # A bounded pause lets disposable multi-thread labs verify that a
             # second request reached the origin before this one completed.
             delay = getattr(peer, "success_delay_seconds", 0)

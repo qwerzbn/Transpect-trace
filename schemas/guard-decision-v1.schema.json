@@ -41,6 +41,19 @@
       "maxLength": 127,
       "title": "Policy Version",
       "type": "string"
+    },
+    "redacted_payload": {
+      "anyOf": [
+        {
+          "maxLength": 18000000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Redacted Payload"
     }
   },
   "required": [

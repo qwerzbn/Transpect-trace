@@ -338,27 +338,194 @@ done:
     return c;
 }
 
+/* A dedicated Claude tool account may run arbitrary executables. Unlike the
+ * desktop model lease, this exception is deliberately SID-wide, but it is
+ * restricted to the local inspection proxy's TCP port on both loopback
+ * families. The default-deny policy remains persistent; this permit vanishes
+ * with the owning dynamic BFE session or the bound controller process. */
+static DWORD proxy_lease(HANDLE e,UserCondition *u,int argc,wchar_t **argv) {
+    if(argc!=9 || wcscmp(argv[8],L"--isolated-vm"))return ERROR_INVALID_PARAMETER;
+    unsigned port=wcstoul(argv[3],NULL,10);
+    DWORD controller_pid=wcstoul(argv[4],NULL,10);
+    ULONGLONG controller_birth=_wcstoui64(argv[5],NULL,10);
+    DWORD proxy_pid=wcstoul(argv[6],NULL,10);
+    ULONGLONG proxy_birth=_wcstoui64(argv[7],NULL,10);
+    if(port<1 || port>65535 || !controller_pid || !controller_birth ||
+       !proxy_pid || !proxy_birth || controller_pid==proxy_pid)
+        return ERROR_INVALID_PARAMETER;
+    UINT64 block_ids[4]={0};DWORD c=verify_blocks(e,u,block_ids);if(c)return c;
+    HANDLE controller=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,controller_pid);
+    if(!controller)return GetLastError();
+    HANDLE proxy=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,proxy_pid);
+    if(!proxy){c=GetLastError();goto done;}
+    FILETIME times[4];
+    if(!GetProcessTimes(controller,&times[0],&times[1],&times[2],&times[3]) ||
+       (((ULONGLONG)times[0].dwHighDateTime<<32)|times[0].dwLowDateTime)!=controller_birth ||
+       WaitForSingleObject(controller,0)!=WAIT_TIMEOUT) {
+        c=ERROR_INVALID_DATA;goto done;
+    }
+    if(!GetProcessTimes(proxy,&times[0],&times[1],&times[2],&times[3]) ||
+       (((ULONGLONG)times[0].dwHighDateTime<<32)|times[0].dwLowDateTime)!=proxy_birth ||
+       WaitForSingleObject(proxy,0)!=WAIT_TIMEOUT) {
+        c=ERROR_INVALID_DATA;goto done;
+    }
+    FWPM_SESSION0 session={0};session.flags=FWPM_SESSION_FLAG_DYNAMIC;
+    session.displayData.name=L"Transpect isolated Claude tool proxy permit";
+    HANDLE dynamic=NULL;c=FwpmEngineOpen0(NULL,RPC_C_AUTHN_WINNT,NULL,&session,&dynamic);
+    if(c)goto done;
+    FWPM_FILTER_CONDITION0 conditions[4]={0};
+    conditions[0].fieldKey=FWPM_CONDITION_ALE_USER_ID;
+    conditions[0].matchType=FWP_MATCH_EQUAL;
+    conditions[0].conditionValue.type=FWP_SECURITY_DESCRIPTOR_TYPE;
+    conditions[0].conditionValue.sd=&u->blob;
+    conditions[1].fieldKey=FWPM_CONDITION_IP_REMOTE_ADDRESS;
+    conditions[1].matchType=FWP_MATCH_EQUAL;
+    conditions[2].fieldKey=FWPM_CONDITION_IP_REMOTE_PORT;
+    conditions[2].matchType=FWP_MATCH_EQUAL;
+    conditions[2].conditionValue.type=FWP_UINT16;
+    conditions[2].conditionValue.uint16=(UINT16)port;
+    conditions[3].fieldKey=FWPM_CONDITION_IP_PROTOCOL;
+    conditions[3].matchType=FWP_MATCH_EQUAL;
+    conditions[3].conditionValue.type=FWP_UINT8;
+    conditions[3].conditionValue.uint8=IPPROTO_TCP;
+    FWPM_FILTER0 filter={0};
+    filter.displayData.name=L"Transpect Claude tool loopback inspection proxy";
+    filter.subLayerKey=u->keys.sublayer;
+    filter.action.type=FWP_ACTION_PERMIT;
+    filter.weight.type=FWP_UINT8;filter.weight.uint8=15;
+    filter.numFilterConditions=4;filter.filterCondition=conditions;
+    UINT64 id4=0,id6=0;
+    conditions[1].conditionValue.type=FWP_UINT32;
+    conditions[1].conditionValue.uint32=0x7f000001;
+    filter.layerKey=FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+    c=FwpmFilterAdd0(dynamic,&filter,NULL,&id4);
+    FWP_BYTE_ARRAY16 loopback6={0};loopback6.byteArray16[15]=1;
+    if(!c){
+        conditions[1].conditionValue.type=FWP_BYTE_ARRAY16_TYPE;
+        conditions[1].conditionValue.byteArray16=&loopback6;
+        filter.layerKey=FWPM_LAYER_ALE_AUTH_CONNECT_V6;
+        c=FwpmFilterAdd0(dynamic,&filter,NULL,&id6);
+    }
+    if(!c){
+        printf("{\"state\":\"proxy_permit_active\",\"v4_filter_id\":%llu,\"v6_filter_id\":%llu,\"sid_wide\":true,\"loopback_only\":true,\"pid_exact_filter\":false}\n",id4,id6);
+        fflush(stdout);
+        while(WaitForSingleObject(controller,200)==WAIT_TIMEOUT &&
+              WaitForSingleObject(proxy,0)==WAIT_TIMEOUT){
+            FWPM_FILTER0 *check4=NULL,*check6=NULL;
+            DWORD h4=FwpmFilterGetById0(dynamic,id4,&check4);
+            DWORD h6=FwpmFilterGetById0(dynamic,id6,&check6);
+            if(check4)FwpmFreeMemory0((void**)&check4);
+            if(check6)FwpmFreeMemory0((void**)&check6);
+            if(h4||h6){c=h4?h4:h6;break;}
+        }
+    }
+    /* The dynamic session owns both permits, including partial additions. */
+    {DWORD close=FwpmEngineClose0(dynamic);if(!c)c=close;}
+done:
+    if(proxy)CloseHandle(proxy);
+    CloseHandle(controller);
+    return c;
+}
+
+static int proxy_sid_matches(FWP_BYTE_BLOB *blob,PSID sid) {
+    if(!blob||!blob->data)return 0;
+    BOOL present=FALSE,defaulted=FALSE;PACL acl=NULL;
+    if(!GetSecurityDescriptorDacl((PSECURITY_DESCRIPTOR)blob->data,&present,&acl,&defaulted)||
+       !present||!acl||acl->AceCount!=1)return 0;
+    ACCESS_ALLOWED_ACE *ace=NULL;
+    return GetAce(acl,0,(void**)&ace) && ace->Header.AceType==ACCESS_ALLOWED_ACE_TYPE &&
+           ace->Mask==FWP_ACTRL_MATCH_FILTER && EqualSid((PSID)&ace->SidStart,sid);
+}
+
+static DWORD inspect_proxy_filter(HANDLE e,UserCondition *u,UINT64 id,
+                                  const GUID *layer,int ipv6,UINT16 port) {
+    FWPM_FILTER0 *f=NULL;DWORD c=FwpmFilterGetById0(e,id,&f);if(c)return c;
+    int seen_user=0,seen_address=0,seen_port=0,seen_protocol=0;
+    if(!IsEqualGUID(&f->layerKey,layer)||!IsEqualGUID(&f->subLayerKey,&u->keys.sublayer)||
+       f->providerKey||f->action.type!=FWP_ACTION_PERMIT||
+       f->weight.type!=FWP_UINT8||f->weight.uint8!=15||
+       (f->flags&(FWPM_FILTER_FLAG_DISABLED|FWPM_FILTER_FLAG_PERSISTENT))||
+       f->numFilterConditions!=4)c=ERROR_INVALID_DATA;
+    for(UINT32 i=0;!c&&i<f->numFilterConditions;i++) {
+        FWPM_FILTER_CONDITION0 *v=&f->filterCondition[i];
+        if(v->matchType!=FWP_MATCH_EQUAL){c=ERROR_INVALID_DATA;break;}
+        if(IsEqualGUID(&v->fieldKey,&FWPM_CONDITION_ALE_USER_ID)) {
+            seen_user++;
+            if(v->conditionValue.type!=FWP_SECURITY_DESCRIPTOR_TYPE||
+               !proxy_sid_matches(v->conditionValue.sd,u->sid))c=ERROR_INVALID_DATA;
+        } else if(IsEqualGUID(&v->fieldKey,&FWPM_CONDITION_IP_REMOTE_ADDRESS)) {
+            seen_address++;
+            if(ipv6) {
+                FWP_BYTE_ARRAY16 *a=v->conditionValue.byteArray16;
+                if(v->conditionValue.type!=FWP_BYTE_ARRAY16_TYPE||!a)c=ERROR_INVALID_DATA;
+                else for(int j=0;j<16;j++)
+                    if(a->byteArray16[j]!=(j==15?1:0))c=ERROR_INVALID_DATA;
+            } else if(v->conditionValue.type!=FWP_UINT32||
+                      v->conditionValue.uint32!=0x7f000001)c=ERROR_INVALID_DATA;
+        } else if(IsEqualGUID(&v->fieldKey,&FWPM_CONDITION_IP_REMOTE_PORT)) {
+            seen_port++;
+            if(v->conditionValue.type!=FWP_UINT16||v->conditionValue.uint16!=port)c=ERROR_INVALID_DATA;
+        } else if(IsEqualGUID(&v->fieldKey,&FWPM_CONDITION_IP_PROTOCOL)) {
+            seen_protocol++;
+            if(v->conditionValue.type!=FWP_UINT8||v->conditionValue.uint8!=IPPROTO_TCP)c=ERROR_INVALID_DATA;
+        } else c=ERROR_INVALID_DATA;
+    }
+    if(!c&&(seen_user!=1||seen_address!=1||seen_port!=1||seen_protocol!=1))c=ERROR_INVALID_DATA;
+    FwpmFreeMemory0((void**)&f);return c;
+}
+
+static DWORD proxy_status(HANDLE e,UserCondition *u,int argc,wchar_t **argv) {
+    if(argc!=7||wcscmp(argv[6],L"--isolated-vm"))return ERROR_INVALID_PARAMETER;
+    UINT64 id4=_wcstoui64(argv[3],NULL,10),id6=_wcstoui64(argv[4],NULL,10);
+    unsigned port=wcstoul(argv[5],NULL,10);
+    if(!id4||!id6||id4==id6||port<1||port>65535)return ERROR_INVALID_PARAMETER;
+    UINT64 block_ids[4]={0};DWORD c=verify_blocks(e,u,block_ids);
+    if(!c)c=inspect_proxy_filter(e,u,id4,&FWPM_LAYER_ALE_AUTH_CONNECT_V4,0,(UINT16)port);
+    if(!c)c=inspect_proxy_filter(e,u,id6,&FWPM_LAYER_ALE_AUTH_CONNECT_V6,1,(UINT16)port);
+    printf("{\"proxy_permit_verified\":%s,\"v4_filter_id\":%llu,\"v6_filter_id\":%llu,\"port\":%u,\"error\":%lu}\n",
+           c?"false":"true",id4,id6,port,c);
+    return c;
+}
+
+static DWORD remove_if_present(HANDLE e,UserCondition *u) {
+    DWORD c=inspect_sublayer(e,&u->keys.sublayer);
+    if(c==FWP_E_SUBLAYER_NOT_FOUND)return ERROR_SUCCESS;
+    if(c)return c;
+    c=remove_blocks(e,u);
+    if(c && inspect_sublayer(e,&u->keys.sublayer)==FWP_E_SUBLAYER_NOT_FOUND)
+        return ERROR_SUCCESS; /* a concurrent stop already completed */
+    return c;
+}
+
 int wmain(int argc,wchar_t **argv) {
-    /* install/status/remove SID --isolated-vm
-       lease SID pid birth sha256 ip port tcp seconds controller-pid controller-birth --isolated-vm */
+    /* install/status/remove/remove-if-present SID --isolated-vm
+       lease SID pid birth sha256 ip port tcp seconds controller-pid controller-birth --isolated-vm
+       proxy-lease SID port controller-pid controller-birth proxy-pid proxy-birth --isolated-vm
+       proxy-status SID v4-filter-id v6-filter-id port --isolated-vm */
     if(argc<4||wcscmp(argv[argc-1],L"--isolated-vm"))return 2;
     if((wcscmp(argv[1],L"install")&&wcscmp(argv[1],L"status")&&
-        wcscmp(argv[1],L"remove")&&wcscmp(argv[1],L"lease"))||
-       (wcscmp(argv[1],L"lease")&&argc!=4))return 2;
+        wcscmp(argv[1],L"remove")&&wcscmp(argv[1],L"remove-if-present")&&
+        wcscmp(argv[1],L"lease")&&
+        wcscmp(argv[1],L"proxy-lease")&&wcscmp(argv[1],L"proxy-status"))||
+       ((wcscmp(argv[1],L"lease")&&wcscmp(argv[1],L"proxy-lease")&&
+         wcscmp(argv[1],L"proxy-status"))&&argc!=4))return 2;
     UserCondition u={0};DWORD code=user_condition(argv[2],&u);
     if(!code&&!dedicated_user(u.sid))code=ERROR_ACCESS_DENIED;
     HANDLE engine=NULL;if(!code)code=open_engine(&engine,0);
     if(!code) {
         if(!wcscmp(argv[1],L"install"))code=install(engine,&u);
         else if(!wcscmp(argv[1],L"remove"))code=remove_blocks(engine,&u);
+        else if(!wcscmp(argv[1],L"remove-if-present"))code=remove_if_present(engine,&u);
         else if(!wcscmp(argv[1],L"status")){
             UINT64 ids[4]={0};code=verify_blocks(engine,&u,ids);
             printf("{\"installed\":%s,\"v4_filter_id\":%llu,\"v6_filter_id\":%llu,\"in_v4_filter_id\":%llu,\"in_v6_filter_id\":%llu,\"error\":%lu}\n",
                    code?"false":"true",ids[0],ids[1],ids[2],ids[3],code);
-        } else code=lease(engine,&u,argc,argv);
+        } else if(!wcscmp(argv[1],L"lease"))code=lease(engine,&u,argc,argv);
+        else if(!wcscmp(argv[1],L"proxy-lease"))code=proxy_lease(engine,&u,argc,argv);
+        else code=proxy_status(engine,&u,argc,argv);
     }
     if(engine){DWORD close=FwpmEngineClose0(engine);if(!code)code=close;}
     user_free(&u);
-    if(wcscmp(argv[1],L"status"))printf("{\"operation\":\"%ls\",\"error\":%lu}\n",argv[1],code);
+    if(wcscmp(argv[1],L"status") && wcscmp(argv[1],L"proxy-status"))printf("{\"operation\":\"%ls\",\"error\":%lu}\n",argv[1],code);
     return code?4:0;
 }

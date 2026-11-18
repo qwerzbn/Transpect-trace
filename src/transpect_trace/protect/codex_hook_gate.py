@@ -71,7 +71,8 @@ DENY_MESSAGE = {
 DEFAULT_ENFORCED_CATEGORIES = ("SECRET", "PII", "INTERNAL_DOC", "SOURCE_CODE",
                                "INSPECTION_ERROR", "SENSITIVE_PATH",
                                "NETWORK_EGRESS", "GATE_TAMPER")
-DEFAULT_ADVISORY_RULE_IDS = ("CODE_STRUCTURE", "ENTROPY_TOKEN", "IMAGE_UNINSPECTED")
+DEFAULT_ADVISORY_RULE_IDS = ("CODE_STRUCTURE", "ENTROPY_TOKEN", "ENTROPY_TOKEN_DECODED",
+                             "IMAGE_UNINSPECTED")
 DEFAULT_OVERRIDE_TTL = 600
 _UNINSPECTABLE = {"INSPECTION_FAILED", "TEXT_UNINSPECTABLE", "FILE_UNINSPECTABLE"}
 _EVENT_NAME = re.compile(rb'"hook_event_name"\s*:\s*"([A-Za-z]{1,64})"')
@@ -95,12 +96,15 @@ class GateConfig:
     protected_paths: tuple[str, ...] = ()
     # `transpect.codex-collection/1.0` rows; None disables collection.
     collection_file: Path | None = None
+    # Redact mode: BLOCK-classified items are replaced with placeholders and
+    # the cleaned request is allowed, instead of denying the whole request.
+    redact_on_block: bool = False
 
     _FIELDS = frozenset(("schema", "mode", "archive_directory", "audit_file",
                          "registration_directory", "enforced_categories",
                          "advisory_rule_ids", "review_override_ttl_seconds",
                          "override_directory", "egress_allowed_hosts",
-                         "protected_paths", "collection_file"))
+                         "protected_paths", "collection_file", "redact_on_block"))
 
     @classmethod
     def load(cls, path: Path) -> "GateConfig":

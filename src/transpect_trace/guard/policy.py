@@ -7,24 +7,31 @@ from pathlib import Path
 import time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 
 Action = Literal["none", "block_request", "block_session", "terminate_process"]
 
 
 class GuardRequest(BaseModel):
+    # Set only after decoding the actual Native pipe frame.
+    _compressed_wire_length: int | None = PrivateAttr(default=None)
     model_config = ConfigDict(extra="forbid")
     schema_: Literal["transpect.guard.request/1.0"] = Field(alias="schema")
     request_id: str = Field(min_length=1, max_length=64)
     guard_session_id: str = Field(min_length=1, max_length=96)
     pid: int = Field(gt=0)
     tid: int = Field(ge=0)
-    kind: Literal["model.request", "native.initialize", "native.ready", "native.outcome"]
-    protocol: Literal["http", "wss", "control"]
+    kind: Literal["model.request", "tool.exec", "native.initialize", "native.ready",
+                  "native.outcome"]
+    protocol: Literal["http", "wss", "process", "control"]
     destination: str | None = None
     completeness: Literal["complete", "partial", "unknown"]
     payload_utf8: str
+    # What the ready frame patched, e.g. which CreateProcessW exports and their
+    # entry bytes. A gate that reports success without a changed entry is a
+    # silent coverage hole, so the controller is told rather than left to trust.
+    installed: str = Field(default="", max_length=512)
     captured_qpc: int | None = None
     qpc_frequency: int | None = None
     outcome_for_request_id: str = ""
@@ -36,16 +43,20 @@ class GuardRequest(BaseModel):
 
     @model_validator(mode="after")
     def control_shape(self):
-        if self.kind != "model.request" and (self.protocol != "control" or self.payload_utf8):
+        carries_payload = {"model.request": ("http", "wss"), "tool.exec": ("process",)}
+        if self.kind not in carries_payload and (self.protocol != "control" or self.payload_utf8):
             raise ValueError("control frames cannot carry a model payload")
-        if self.kind == "model.request" and self.protocol == "control":
-            raise ValueError("model requests require a transport")
+        if self.kind in carries_payload and self.protocol not in carries_payload[self.kind]:
+            raise ValueError("model requests require a transport and tool.exec the process channel")
         if self.diagnostic_stage and self.kind != "native.outcome":
             raise ValueError("diagnostic stage is only valid on Native outcome frames")
+        if self.installed and self.kind != "native.ready":
+            raise ValueError("installed hooks are only reported on the ready frame")
         return self
 
 
 class GuardDecision(BaseModel):
+    _desktop_wire_body: bytes | None = PrivateAttr(default=None)
     model_config = ConfigDict(extra="forbid", populate_by_name=True,
                               json_schema_extra={"required":["schema","request_id","decision","action","reason","policy_version"]})
     schema_: Literal["transpect.guard.decision/1.0"] = Field(default="transpect.guard.decision/1.0", alias="schema")
@@ -54,6 +65,9 @@ class GuardDecision(BaseModel):
     action: Action
     reason: str = Field(max_length=1023)
     policy_version: str = Field(max_length=127)
+    # Present only on redact-mode allows: the cleaned body the native gate
+    # must forward in place of the original bytes.
+    redacted_payload: str | None = Field(default=None, max_length=18_000_000)
 
     @model_validator(mode="after")
     def consistent_action(self):
@@ -61,6 +75,8 @@ class GuardDecision(BaseModel):
             raise ValueError("allow must use action=none")
         if self.decision != "allow" and self.action == "none":
             raise ValueError("non-allow cannot use action=none")
+        if self.redacted_payload is not None and self.decision != "allow":
+            raise ValueError("redacted payload requires an allow decision")
         return self
 
 

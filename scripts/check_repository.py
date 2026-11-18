@@ -14,6 +14,7 @@ import zipfile
 from urllib.parse import unquote, urlsplit
 
 from _build_support import ROOT
+from _release_files import ReleaseInventory
 
 
 def local_links(root=ROOT):
@@ -51,12 +52,8 @@ def check(root=ROOT,with_local_evidence=False):
     required=['src/transpect_trace/'+name for name in ('guard','observe','protect','behavior','flow')]
     required+=['native','schemas','tests','scripts','deploy','patches','.github']
     missing=[rel for rel in required if not (root/rel).is_dir()]
-    tracked=subprocess.check_output(['git','-C',str(root),'ls-files','-z']).decode('utf-8').split('\0')
-    manifest=json.loads((root/'release-files.json').read_text(encoding='utf-8'))
-    # Binary test fixtures are listed separately and audited by pinned digest in
-    # scripts/audit_release.py; both lists together are the tracked allowlist.
-    allowed=set(manifest['files'])|set(manifest.get('binary_fixtures') or {})
-    forbidden=[rel for rel in tracked if rel and (root/rel).is_file() and (rel not in allowed or rel.split('/')[0] in {'.venv','.external','build','runs','dist','.idea'}
+    inventory = ReleaseInventory.read(root)
+    forbidden=[rel for rel in inventory.index_blobs if (root/rel).is_file() and (rel not in inventory.paths or rel.split('/')[0] in {'.venv','.external','build','runs','dist','.idea'}
                or Path(rel).name=='.env' or (Path(rel).name.startswith('.env.') and Path(rel).name!='.env.example'))]
     ignored={rel:subprocess.run(['git','-C',str(root),'check-ignore','--quiet','--',rel],capture_output=True).returncode==0
              for rel in ['.env','.env.local','.idea/workspace.xml','runs/example/summary.json','build/example.dll']}

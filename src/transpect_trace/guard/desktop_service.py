@@ -63,33 +63,135 @@ def file_sha256(path: Path) -> str:
 
 def _validate_pin(pin: dict, origin: Path) -> dict:
     try:
+        code = pin["backend"].get("code_sha256")
         ok = (pin["schema"] == PIN_SCHEMA
               and isinstance(pin["codex_desktop_version"], str)
               and len(pin["backend"]["sha256"]) == 64
+              and (code is None or (isinstance(code, str) and len(code) == 64))
               and isinstance(pin["backend"]["version"], str)
               and set(pin["hooks"]) == set(HOOK_NAMES)
               and all(int(pin["hooks"][name]["rva"], 16) > 0
                       and len(bytes.fromhex(pin["hooks"][name]["prefix_hex"])) >= 8
                       for name in HOOK_NAMES)
               and all(isinstance(pin["abi"][key], int)
-                      for key in ("http_denied_tag", "wss_success_tag", "wss_denied_tag")))
-    except (KeyError, TypeError, ValueError):
+                      for key in ("http_denied_tag", "wss_success_tag", "wss_denied_tag"))
+              and ("api_error_denied_tag" not in pin["abi"]
+                   or (type(pin["abi"]["api_error_denied_tag"]) is int
+                       and 0 < pin["abi"]["api_error_denied_tag"] <= 255)))
+    except (KeyError, TypeError, ValueError, AttributeError):
         ok = False
     if not ok:
         raise ValueError(f"invalid desktop guard pin: {origin.name}")
     return pin
 
 
-def load_pins(directory: Path = PIN_DIR) -> dict[str, dict]:
-    """Supported backends keyed by image SHA-256."""
+def load_pins(directory: Path = PIN_DIR, local_directory: Path | None = None) -> dict[str, dict]:
+    """Supported backends keyed by image SHA-256.
+
+    `directory` holds the validated pins shipped with the repository;
+    `local_directory` holds pins this machine derived automatically.
+    """
     pins = {}
-    for path in sorted(Path(directory).glob("*.json")):
-        pin = _validate_pin(json.loads(path.read_text(encoding="utf-8")), path)
-        pin = {**pin, "_path": path, "_sha256": normalized_sha256(path)}
-        pins[pin["backend"]["sha256"]] = pin
+    for folder in (directory, local_directory):
+        if folder is None or not Path(folder).is_dir():
+            continue
+        for path in sorted(Path(folder).glob("*.json")):
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if (isinstance(value, dict)
+                    and (value.get("production_ready") is False
+                         or value.get("status") == "candidate_lab_only")):
+                raise ValueError(f"candidate pin cannot be loaded by the desktop guard: {path.name}")
+            pin = _validate_pin(value, path)
+            pin = {**pin, "_path": path, "_sha256": normalized_sha256(path)}
+            pins.setdefault(pin["backend"]["sha256"], pin)
     if not pins:
         raise ValueError(f"no desktop guard pins in {directory}")
     return pins
+
+
+def code_sha256(path: Path) -> str:
+    """Digest of a PE32+ image without its signature and checksum.
+
+    Excludes the optional-header CheckSum, the certificate-table directory
+    entry and the certificate table itself, as the Authenticode image hash
+    does. Two files with the same value contain the same code and data; they
+    differ only in how they were signed.
+    """
+    with Path(path).open("rb") as stream:
+        header = stream.read(4096)
+        pe = int.from_bytes(header[0x3C:0x40], "little")
+        if header[pe:pe + 4] != b"PE\0\0" or int.from_bytes(header[pe + 24:pe + 26], "little") != 0x20B:
+            raise ValueError("not a PE32+ image")
+        optional = pe + 24
+        checksum, certificates = optional + 64, optional + 112 + 4 * 8
+        cert_offset = int.from_bytes(header[certificates:certificates + 4], "little")
+        cert_size = int.from_bytes(header[certificates + 4:certificates + 8], "little")
+        size = os.fstat(stream.fileno()).st_size
+        skipped = sorted([(checksum, 4), (certificates, 8)]
+                         + ([(cert_offset, cert_size)] if cert_offset else []))
+        digest, position = hashlib.sha256(), 0
+        for start, length in [*skipped, (size, 0)]:
+            stream.seek(position)
+            remaining = start - position
+            while remaining > 0:
+                chunk = stream.read(min(remaining, 1 << 20))
+                if not chunk:
+                    break
+                digest.update(chunk)
+                remaining -= len(chunk)
+            position = max(position, start + length)
+        return digest.hexdigest()
+
+
+def derive_pin(base: dict, backend_sha256: str, backend_code_sha256: str, version: str,
+               directory: Path, package_full_name: str | None = None) -> dict:
+    """Write the pin of a re-signed build whose code equals a validated one."""
+    if base["backend"].get("code_sha256") != backend_code_sha256:
+        raise ValueError("code digest differs from the validated build")
+    value = {"schema": PIN_SCHEMA, "codex_desktop_version": version,
+             "package_full_name": package_full_name,
+             "backend": {"version": base["backend"]["version"], "sha256": backend_sha256,
+                         "code_sha256": backend_code_sha256},
+             "hooks": base["hooks"], "abi": base["abi"],
+             "derived_from": {"codex_desktop_version": base["codex_desktop_version"],
+                              "backend_sha256": base["backend"]["sha256"],
+                              "method": "identical_code_resigned",
+                              "derived_at": datetime.now().isoformat(timespec="seconds")}}
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{version}-{backend_sha256[:12]}.json"
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {**_validate_pin(value, path), "_path": path, "_sha256": normalized_sha256(path)}
+
+
+_PACKAGES_KEY = (r"Software\Classes\Local Settings\Software\Microsoft\Windows"
+                 r"\CurrentVersion\AppModel\Repository\Packages")
+
+
+def installed_packages() -> dict[str, Path]:
+    """Installed Codex desktop packages: full name -> package root (registry, ~10 ms)."""
+    import winreg
+    found = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _PACKAGES_KEY) as key:
+            for index in range(winreg.QueryInfoKey(key)[0]):
+                name = winreg.EnumKey(key, index)
+                if not name.startswith("OpenAI.Codex_"):
+                    continue
+                with winreg.OpenKey(key, name) as package:
+                    try:
+                        found[name] = Path(winreg.QueryValueEx(package, "PackageRootFolder")[0])
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return found
+
+
+def package_version(full_name: str) -> str:
+    """'OpenAI.Codex_26.1103.4239.0_x64__…' -> '26.1103.4239.0'."""
+    parts = full_name.split("_")
+    return parts[1] if len(parts) > 1 else full_name
 
 
 def pe_read(path: Path, rva: int, size: int) -> bytes:
@@ -134,6 +236,7 @@ def compile_defines(pin: dict) -> list[str]:
             f"-DHTTP_DENIED_TAG={abi['http_denied_tag']}",
             f"-DWSS_SUCCESS_TAG=0x{abi['wss_success_tag']:x}",
             f"-DWSS_DENIED_TAG={abi['wss_denied_tag']}",
+            f"-DAPI_ERROR_DENIED_TAG={abi.get('api_error_denied_tag', 25)}",
             f"-DHTTP_RVA={hooks['http']['rva']}", f"-DWSS_RVA={hooks['wss']['rva']}",
             f"-DDROP_HEADERS_RVA={hooks['drop_headers']['rva']}",
             f"-DAPI_ERROR_MAP_RVA={hooks['api_error_map']['rva']}",
@@ -347,12 +450,18 @@ class ImageHashCache:
     def __init__(self):
         self._known: dict[tuple, str] = {}
 
-    def sha256(self, path: str) -> str:
+    def _cached(self, kind: str, path: str, compute) -> str:
         stat = os.stat(path)
-        key = (ntpath.normcase(path), stat.st_size, stat.st_mtime_ns)
+        key = (kind, ntpath.normcase(str(path)), stat.st_size, stat.st_mtime_ns)
         if key not in self._known:
-            self._known[key] = file_sha256(Path(path))
+            self._known[key] = compute(Path(path))
         return self._known[key]
+
+    def sha256(self, path: str) -> str:
+        return self._cached("file", path, file_sha256)
+
+    def code_sha256(self, path: str) -> str:
+        return self._cached("code", path, code_sha256)
 
 
 def resident_guard_dlls(pid: int) -> list[str]:
@@ -424,6 +533,8 @@ class BackendStatus:
     requests: int = 0
     allowed: int = 0
     denied: int = 0
+    tools_allowed: int = 0
+    tools_denied: int = 0
     last_decision: str = ""
     seen_at: float = field(default_factory=time.time)
 
@@ -431,14 +542,38 @@ class BackendStatus:
 class _DecisionLog:
     """Wraps the shared engine for one backend and reports each decision."""
 
-    def __init__(self, engine, results: dict, on_decision):
+    def __init__(self, engine, results: dict, on_decision, on_tool=None):
         self._engine = engine
         self._results = results
         self._on_decision = on_decision
+        self._on_tool = on_tool
         self.policy = engine.policy
         self.concurrent_safe = getattr(engine, "concurrent_safe", False)
 
+    def _tool_exec(self, request):
+        """Decide a process creation; any failure denies it."""
+        from ..protect import tool_exec
+        from .policy import GuardDecision
+        try:
+            row = tool_exec.decide(self._engine.gate, request.payload_utf8)
+        except Exception as error:
+            row = {"schema": tool_exec.SCHEMA, "decision": "deny",
+                   "reason": f"TOOL_EXEC_CHECK_FAILED_{type(error).__name__}", "rules": [],
+                   "application": "", "sensitive_files": []}
+        allowed = row["decision"] == "allow"
+        row = {**row, "kind": request.kind, "request_id": request.request_id,
+               "guard_session_id": request.guard_session_id}
+        if self._on_tool:
+            self._on_tool(row)
+        decision = GuardDecision(request_id=request.request_id,
+                                 decision="allow" if allowed else "deny",
+                                 action="none" if allowed else "block_request",
+                                 reason=row["reason"][:1023], policy_version=self.policy.version)
+        return decision, row
+
     def evaluate(self, request):
+        if request.kind == "tool.exec":
+            return self._tool_exec(request)
         began = time.perf_counter()
         decision, row = self._engine.evaluate(request)
         if request.kind == "model.request":
@@ -481,6 +616,19 @@ class BackendController(threading.Thread):
         self.log(f"[Codex {status.pid}] {what}  {request.protocol} {kb:.0f} KB  "
                  f"{elapsed_ms:.0f} ms{reason}")
 
+    def _tool(self, row: dict) -> None:
+        status = self.status
+        allowed = row["decision"] == "allow"
+        status.tools_allowed += allowed
+        status.tools_denied += not allowed
+        status.last_decision = datetime.now().strftime("%H:%M:%S")
+        if allowed:
+            return  # process launches are frequent; only denials are printed
+        files = f"  文件：{', '.join(row['sensitive_files'])}" if row.get("sensitive_files") else ""
+        rules = ", ".join(row.get("rules") or ()) or row["reason"]
+        self.log(f"[Codex {status.pid}] 拒绝执行  {row.get('application') or '?'}  "
+                 f"{row['reason']}  {rules}{files}")
+
     def run(self) -> None:
         from .native import inject, wait_ready
         from .pipe import PipeServer
@@ -501,9 +649,10 @@ class BackendController(threading.Thread):
         try:
             if not alive():
                 raise _Exited()
-            engine = _DecisionLog(self.engine, self.results, self._decision)
+            engine = _DecisionLog(self.engine, self.results, self._decision, self._tool)
             pipe = PipeServer(pid, engine, self.run_dir / f"native-audit-{pid}.jsonl",
                               client_sid=self.details["user_sid"])
+            pipe.desktop_history_wire = True
             pipe.start()
             lease.acquire()
             # A backend that is still starting or already exiting can refuse
@@ -584,12 +733,23 @@ def _write_state(path: Path, value: dict) -> None:
             time.sleep(0.05)
 
 
+def create_desktop_engine(config):
+    from ..protect.native_collection import NativeCollectionEngine
+    engine = NativeCollectionEngine(config, archive_full_body=True, shared_request_archive=True,
+                                    scrub_codex_denied_history=True)
+    engine.concurrent_safe = True
+    return engine
+
+
 class Supervisor:
     def __init__(self, *, state_dir: Path = STATE_DIR, pins_dir: Path = PIN_DIR,
                  poll_seconds: float = 0.25, log: Callable[[str], None] = print):
         self.state_dir, self.poll, self.log = Path(state_dir), poll_seconds, log
-        self.pins = load_pins(pins_dir)
+        self.local_pins_dir = self.state_dir / "pins"
+        self.pins = load_pins(pins_dir, self.local_pins_dir)
         self.hashes = ImageHashCache()
+        self.adapt_lock = threading.RLock()
+        self.seen_packages: set[str] = set()
         self.backends: dict[tuple[int, int], BackendStatus] = {}
         self.controllers: dict[tuple[int, int], BackendController] = {}
         self.dlls: dict[str, Path] = {}
@@ -600,20 +760,18 @@ class Supervisor:
 
     def _prepare(self) -> None:
         from ..protect.codex_hook_gate import GateConfig
-        from ..protect.native_collection import NativeCollectionEngine
         self.user_sid = current_user_sid()
         for backend in installed_backends():
-            pin = self.pins.get(self.hashes.sha256(str(backend)))
-            if pin and pin["backend"]["sha256"] not in self.dlls:
-                self.dlls[pin["backend"]["sha256"]] = ensure_dll(pin, backend)
+            try:
+                self.adapt(backend)
+            except Exception as error:  # a broken leftover must not stop the guard
+                self.log(f"后端 {backend} 适配失败：{type(error).__name__}: {error}")
         self.run_dir.mkdir(parents=True, exist_ok=True)
         config = GateConfig(mode="enforce", archive_directory=self.run_dir / "archive",
                             audit_file=self.run_dir / "audit.jsonl", registration_directory=None,
                             review_override_ttl_seconds=0,
                             collection_file=self.run_dir / "collection.jsonl")
-        self.engine = NativeCollectionEngine(config, archive_full_body=True,
-                                             shared_request_archive=True)
-        self.engine.concurrent_safe = True
+        self.engine = create_desktop_engine(config)
         self.results: dict = {}
         collect = self.engine.collector.collect
 
@@ -623,6 +781,94 @@ class Supervisor:
             return result
 
         self.engine.collector.collect = remember
+
+    def _package_of(self, sha: str) -> str | None:
+        """Full name of the installed package whose backend has this hash."""
+        for name, root in installed_packages().items():
+            image = root / "app" / "resources" / "codex.exe"
+            try:
+                if image.is_file() and self.hashes.sha256(str(image)) == sha:
+                    return name
+            except OSError:
+                continue
+        return None
+
+    def adapt(self, image: Path, package_full_name: str | None = None) -> dict | None:
+        """Return the pin for this backend and make sure its DLL is built.
+
+        Tier 1 of automatic adaptation: a backend whose code digest equals a
+        validated build is a re-signed copy of it, so that build's hooks and
+        ABI apply unchanged and a local pin is derived for its file hash.
+        Returns None when the code differs from every validated build.
+        """
+        with self.adapt_lock:
+            sha = self.hashes.sha256(str(image))
+            pin = self.pins.get(sha)
+            if pin is None:
+                code = self.hashes.code_sha256(str(image))
+                base = next((p for p in self.pins.values()
+                             if p["backend"].get("code_sha256") == code), None)
+                if base is None:
+                    return None
+                package_full_name = package_full_name or self._package_of(sha)
+                version = (package_version(package_full_name) if package_full_name
+                           else f"{base['codex_desktop_version']}+{sha[:8]}")
+                pin = derive_pin(base, sha, code, version, self.local_pins_dir,
+                                 package_full_name)
+                self.pins[sha] = pin
+                self.log(f"检测到 Codex {version}：代码与已验证的 "
+                         f"{base['codex_desktop_version']} 完全相同（仅签名不同），已自动适配")
+            if sha not in self.dlls:
+                self.dlls[sha] = ensure_dll(pin, Path(image))
+                self._backup(pin, Path(image))
+            return pin
+
+    def _backup(self, pin: dict, image: Path, keep: int = 3) -> None:
+        """Keep a copy of each supported backend for later adaptation work.
+
+        Codex deletes the previous backend the moment it starts an update, so
+        the last few validated builds are kept here (newest `keep` versions).
+        """
+        import shutil
+        root = self.state_dir / "backends"
+        target = root / f"{pin['codex_desktop_version']}-{pin['backend']['sha256'][:12]}"
+        try:
+            if not (target / "codex.exe").is_file():
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(image, target / "codex.exe")
+                (target / "pin.json").write_text(json.dumps(
+                    {k: v for k, v in pin.items() if not k.startswith("_")},
+                    ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            kept = sorted((path for path in root.iterdir() if path.is_dir()),
+                          key=lambda path: path.stat().st_mtime, reverse=True)
+            for old in kept[keep:]:
+                shutil.rmtree(old, ignore_errors=True)
+        except OSError as error:
+            self.log(f"后端备份失败（不影响防护）：{error}")
+
+    def _preadapt(self, name: str, root: Path) -> None:
+        """Adapt a newly installed package before Codex starts its backend."""
+        image = root / "app" / "resources" / "codex.exe"
+        try:
+            if not image.is_file():
+                return
+            known = self.hashes.sha256(str(image)) in self.pins
+            pin = self.adapt(image, name)
+        except Exception as error:
+            self.log(f"安装包 {package_version(name)} 适配失败：{type(error).__name__}: {error}")
+            return
+        if pin is None:
+            self.log(f"安装包 {package_version(name)} 的代码与已验证版本不同，无法自动适配；"
+                     f"该版本启动后不会接入防护")
+        elif not known:
+            self.log(f"安装包 {package_version(name)} 已预先完成适配，Codex 启动后即可接入")
+
+    def _watch_packages(self) -> None:
+        for name, root in installed_packages().items():
+            if name not in self.seen_packages:
+                self.seen_packages.add(name)
+                threading.Thread(target=self._preadapt, args=(name, root), daemon=True,
+                                 name=f"preadapt-{name}").start()
 
     def _consider(self, pid: int) -> None:
         details = process_details(pid)
@@ -639,15 +885,20 @@ class Supervisor:
         except OSError as error:
             status.state, status.detail = "FAILED", f"cannot hash backend: {error}"
             return
-        pin = self.pins.get(sha)
+        try:
+            pin = self.adapt(Path(details["image_path"]))
+        except Exception as error:
+            status.state, status.detail = "FAILED", f"适配失败：{type(error).__name__}: {error}"
+            self.log(f"[Codex {pid}] {status.detail}")
+            return
         if pin is None:
             status.state = "UNSUPPORTED_VERSION"
-            status.detail = f"后端 SHA-256 {sha[:12]}… 不在支持列表"
-            supported = ", ".join(sorted(p["codex_desktop_version"] for p in self.pins.values()))
-            self.log(f"[Codex {pid}] 版本不受支持，未接入。支持的版本：{supported}")
+            status.detail = f"后端 SHA-256 {sha[:12]}… 的代码与已验证版本不同"
+            supported = ", ".join(sorted({p["codex_desktop_version"] for p in self.pins.values()}))
+            self.log(f"[Codex {pid}] 告警：版本不受支持，未接入，该 Codex 的请求目前不受保护。"
+                     f"代码与已验证版本不同，需要人工适配；请暂缓在其他电脑上推送此版本。"
+                     f"已支持：{supported}")
             return
-        if sha not in self.dlls:
-            self.dlls[sha] = ensure_dll(pin, Path(details["image_path"]))
         controller = BackendController(details, self.dlls[sha], self.engine, self.results,
                                        self.run_dir, status, self.log)
         self.controllers[key] = controller
@@ -659,7 +910,10 @@ class Supervisor:
                 "started_at": self.started.isoformat(timespec="seconds"),
                 "updated_at": datetime.now().isoformat(timespec="seconds"),
                 "run_dir": str(self.run_dir),
-                "supported_versions": sorted(p["codex_desktop_version"] for p in self.pins.values()),
+                "supported_versions": sorted({p["codex_desktop_version"]
+                                              for p in self.pins.values()}),
+                "adapted_versions": sorted({p["codex_desktop_version"] for p in self.pins.values()
+                                            if "derived_from" in p}),
                 "backends": [vars(status) for status in self.backends.values()]}
 
     def run(self) -> None:
@@ -676,7 +930,7 @@ class Supervisor:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             self._prepare()
             self.log(f"防护已启动，正在监视 Codex。记录目录：{self.run_dir}")
-            last_write = 0.0
+            last_write = last_packages = 0.0
             known: set[int] = set()
             while not self.stop.is_set() and self.k.WaitForSingleObject(stop_event, 0) != 0:
                 current = {pid for pid, _parent, exe in list_processes()
@@ -685,7 +939,17 @@ class Supervisor:
                 # only after it left the list, and is then examined again.
                 for pid in sorted(current - known):
                     self._consider(pid)
+                for (pid, _birth), status in self.backends.items():
+                    # Controllers report their own exit; a backend that was
+                    # never attached is marked here once its process is gone.
+                    if pid not in current and status.state in (
+                            "FAILED", "UNSUPPORTED_VERSION", "STARTING"):
+                        status.detail = f"进程已退出（{status.detail or status.state}）"
+                        status.state = "EXITED"
                 known = current
+                if time.monotonic() - last_packages >= 2:
+                    self._watch_packages()
+                    last_packages = time.monotonic()
                 if time.monotonic() - last_write >= 1:
                     _write_state(state_file, self.state())
                     last_write = time.monotonic()

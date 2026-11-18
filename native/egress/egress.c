@@ -9,12 +9,27 @@
 #include <string.h>
 #include "../guard/third_party/minhook/include/MinHook.h"
 #include "protocol.h"
+#ifndef SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER
+/* Windows SDK 10.0.26100.0 shared/ws2def.h; absent in bundled MinGW headers. */
+#define SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER _WSAIORW(IOC_WS2,36)
+#endif
 
 typedef BOOL (WINAPI *CreateInternal)(HANDLE,LPCWSTR,LPWSTR,LPSECURITY_ATTRIBUTES,LPSECURITY_ATTRIBUTES,BOOL,DWORD,LPVOID,LPCWSTR,LPSTARTUPINFOW,LPPROCESS_INFORMATION,PHANDLE);
 static CreateInternal original_create;
 static int (WSAAPI *original_connect)(SOCKET,const struct sockaddr *,int);
 static int (WSAAPI *original_wsaconnect)(SOCKET,const struct sockaddr *,int,LPWSABUF,LPWSABUF,LPQOS,LPQOS);
 static LPFN_CONNECTEX original_connectex;
+static int (WSAAPI *original_send)(SOCKET,const char*,int,int);
+static int (WSAAPI *original_sendto)(SOCKET,const char*,int,int,const struct sockaddr*,int);
+static int (WSAAPI *original_wsasend)(SOCKET,LPWSABUF,DWORD,LPDWORD,DWORD,LPWSAOVERLAPPED,LPWSAOVERLAPPED_COMPLETION_ROUTINE);
+static int (WSAAPI *original_wsasendto)(SOCKET,LPWSABUF,DWORD,LPDWORD,DWORD,const struct sockaddr*,int,LPWSAOVERLAPPED,LPWSAOVERLAPPED_COMPLETION_ROUTINE);
+static LPFN_WSASENDMSG original_sendmsg,original_sendmsg_export;
+static LPFN_TRANSMITFILE original_transmitfile,original_transmitfile_export;
+static LPFN_TRANSMITPACKETS original_transmitpackets;
+static int (WSAAPI *original_ioctl)(SOCKET,DWORD,LPVOID,DWORD,LPVOID,DWORD,LPDWORD,LPWSAOVERLAPPED,LPWSAOVERLAPPED_COMPLETION_ROUTINE);
+static BOOL (WINAPI *original_writefile)(HANDLE,LPCVOID,DWORD,LPDWORD,LPOVERLAPPED);
+static BOOL (WINAPI *original_writefileex)(HANDLE,LPCVOID,DWORD,LPOVERLAPPED,LPOVERLAPPED_COMPLETION_ROUTINE);
+static void *target_connectex,*target_sendmsg,*target_transmitfile,*target_transmitpackets;
 static EgressConfig config;
 static HMODULE module;
 static volatile LONG initialized, healthy;
@@ -134,43 +149,142 @@ static int decide(EgressRequest request) {
     } else InterlockedExchange(&healthy,0);
     release_job(job); return allowed;
 }
-static int check_destination(SOCKET socket,const struct sockaddr *address,int length,uint64_t *attempt) {
+static int check_destination(SOCKET socket,const struct sockaddr *address,int length,uint64_t *attempt,int sending) {
     if (config.root) return 1; /* LLM transport belongs to Native Guard. */
-    EgressRequest request=request_for(EGRESS_CONNECT); *attempt=request.sequence;
-    int type=0, bytes=sizeof(type);
-    if (getsockopt(socket,SOL_SOCKET,SO_TYPE,(char*)&type,&bytes)==SOCKET_ERROR) return 0;
-    /* This adapter authorizes TCP connection attempts only. Preserve the
-       original API for other socket types; in particular, denying UDP connect
-       does not protect sendto and would silently broaden a TCP-only policy. */
-    if (type!=SOCK_STREAM) return 1;
-    if (!address || length<(int)sizeof(struct sockaddr)) return 0;
-    if (address->sa_family==AF_INET && length>=(int)sizeof(struct sockaddr_in)) {
-        const struct sockaddr_in *a=(const struct sockaddr_in*)address;
+    EgressRequest request=request_for(sending?EGRESS_SEND:EGRESS_CONNECT); *attempt=request.sequence;
+    WSAPROTOCOL_INFOW info;int bytes=sizeof(info);
+    if (getsockopt(socket,SOL_SOCKET,SO_PROTOCOL_INFOW,(char*)&info,&bytes)==SOCKET_ERROR) return 0;
+    if (info.iSocketType==SOCK_STREAM && info.iProtocol==IPPROTO_TCP) request.reserved=IPPROTO_TCP;
+    else if (info.iSocketType==SOCK_DGRAM && info.iProtocol==IPPROTO_UDP) request.reserved=IPPROTO_UDP;
+    else return 0; /* Raw/custom socket protocols have no inspection contract. */
+    struct sockaddr_storage copied={0};SIZE_T read=0;
+    /* TCP sendto ignores its explicit destination. Authorize the connected
+       peer; UDP can supply a destination or use its connected default peer. */
+    if (sending && (info.iSocketType==SOCK_STREAM || !address)) {
+        length=sizeof(copied);
+        if (getpeername(socket,(struct sockaddr*)&copied,&length)==SOCKET_ERROR) return 0;
+    } else {
+        if (!address || length<(int)sizeof(struct sockaddr) || length>(int)sizeof(copied) ||
+            !ReadProcessMemory(GetCurrentProcess(),address,&copied,(SIZE_T)length,&read) || read!=(SIZE_T)length) return 0;
+    }
+    if (copied.ss_family==AF_INET && length>=(int)sizeof(struct sockaddr_in)) {
+        const struct sockaddr_in *a=(const struct sockaddr_in*)&copied;
         request.family=4; request.port=ntohs(a->sin_port); memcpy(request.address,&a->sin_addr,4);
-    } else if (address->sa_family==AF_INET6 && length>=(int)sizeof(struct sockaddr_in6)) {
-        const struct sockaddr_in6 *a=(const struct sockaddr_in6*)address;
+    } else if (copied.ss_family==AF_INET6 && length>=(int)sizeof(struct sockaddr_in6)) {
+        const struct sockaddr_in6 *a=(const struct sockaddr_in6*)&copied;
+        if (a->sin6_scope_id) return 0; /* Interface-scoped destinations unsupported. */
         request.family=6; request.port=ntohs(a->sin6_port); memcpy(request.address,&a->sin6_addr,16);
     } else return 0;
     return decide(request);
 }
-static void blocked_result(uint64_t attempt) {
+static void blocked_result(uint64_t attempt,int sending) {
     EgressRequest result=request_for(EGRESS_RESULT); result.child_creation=attempt;
+    result.reserved=sending?EGRESS_SEND:EGRESS_CONNECT;
     result.result=SOCKET_ERROR; result.error=WSAEACCES; decide(result); WSASetLastError(WSAEACCES);
 }
 static int WSAAPI hook_connect(SOCKET socket,const struct sockaddr *address,int length) {
     uint64_t attempt=0;
-    if (!check_destination(socket,address,length,&attempt)) { blocked_result(attempt); return SOCKET_ERROR; }
+    if (!check_destination(socket,address,length,&attempt,0)) { blocked_result(attempt,0); return SOCKET_ERROR; }
     return original_connect(socket,address,length);
 }
 static int WSAAPI hook_wsaconnect(SOCKET socket,const struct sockaddr *address,int length,LPWSABUF caller,LPWSABUF callee,LPQOS send,LPQOS receive) {
     uint64_t attempt=0;
-    if (!check_destination(socket,address,length,&attempt)) { blocked_result(attempt); return SOCKET_ERROR; }
+    if (!check_destination(socket,address,length,&attempt,0)) { blocked_result(attempt,0); return SOCKET_ERROR; }
     return original_wsaconnect(socket,address,length,caller,callee,send,receive);
 }
 static BOOL PASCAL hook_connectex(SOCKET socket,const struct sockaddr *address,int length,PVOID data,DWORD size,LPDWORD sent,LPOVERLAPPED overlapped) {
     uint64_t attempt=0;
-    if (!check_destination(socket,address,length,&attempt)) { blocked_result(attempt); return FALSE; }
+    if (!check_destination(socket,address,length,&attempt,0)) { if(sent)*sent=0;blocked_result(attempt,0); return FALSE; }
     return original_connectex(socket,address,length,data,size,sent,overlapped);
+}
+static int allow_send(SOCKET socket,const struct sockaddr *address,int length) {
+    uint64_t attempt=0;
+    if(check_destination(socket,address,length,&attempt,1))return 1;
+    blocked_result(attempt,1);return 0;
+}
+static int WSAAPI hook_send(SOCKET s,const char *buf,int len,int flags) {
+    if(!allow_send(s,NULL,0))return SOCKET_ERROR;
+    return original_send(s,buf,len,flags);
+}
+static int WSAAPI hook_sendto(SOCKET s,const char *buf,int len,int flags,const struct sockaddr *to,int tolen) {
+    if(!allow_send(s,to,tolen))return SOCKET_ERROR;
+    return original_sendto(s,buf,len,flags,to,tolen);
+}
+static int WSAAPI hook_wsasend(SOCKET s,LPWSABUF buf,DWORD count,LPDWORD sent,DWORD flags,LPWSAOVERLAPPED ov,LPWSAOVERLAPPED_COMPLETION_ROUTINE done) {
+    if(!allow_send(s,NULL,0)){if(sent)*sent=0;return SOCKET_ERROR;}
+    return original_wsasend(s,buf,count,sent,flags,ov,done);
+}
+static int WSAAPI hook_wsasendto(SOCKET s,LPWSABUF buf,DWORD count,LPDWORD sent,DWORD flags,const struct sockaddr *to,int tolen,LPWSAOVERLAPPED ov,LPWSAOVERLAPPED_COMPLETION_ROUTINE done) {
+    if(!allow_send(s,to,tolen)){if(sent)*sent=0;return SOCKET_ERROR;}
+    return original_wsasendto(s,buf,count,sent,flags,to,tolen,ov,done);
+}
+static int allow_message(SOCKET s,LPWSAMSG message) {
+    if(config.root)return 1;
+    WSAMSG copy={0};SIZE_T read=0;
+    if(!message||!ReadProcessMemory(GetCurrentProcess(),message,&copy,sizeof(copy),&read)||read!=sizeof(copy)){
+        blocked_result(0,1);return 0;
+    }
+    return allow_send(s,copy.name,copy.namelen);
+}
+static INT PASCAL hook_sendmsg(SOCKET s,LPWSAMSG msg,DWORD flags,LPDWORD sent,LPWSAOVERLAPPED ov,LPWSAOVERLAPPED_COMPLETION_ROUTINE done) {
+    if(!allow_message(s,msg)){if(sent)*sent=0;return SOCKET_ERROR;}
+    return original_sendmsg(s,msg,flags,sent,ov,done);
+}
+static INT PASCAL hook_sendmsg_export(SOCKET s,LPWSAMSG msg,DWORD flags,LPDWORD sent,LPWSAOVERLAPPED ov,LPWSAOVERLAPPED_COMPLETION_ROUTINE done) {
+    if(!allow_message(s,msg)){if(sent)*sent=0;return SOCKET_ERROR;}
+    return original_sendmsg_export(s,msg,flags,sent,ov,done);
+}
+static BOOL PASCAL hook_transmitfile(SOCKET s,HANDLE file,DWORD size,DWORD per_send,LPOVERLAPPED ov,LPTRANSMIT_FILE_BUFFERS buffers,DWORD flags) {
+    if(!allow_send(s,NULL,0))return FALSE;
+    return original_transmitfile(s,file,size,per_send,ov,buffers,flags);
+}
+static BOOL PASCAL hook_transmitfile_export(SOCKET s,HANDLE file,DWORD size,DWORD per_send,LPOVERLAPPED ov,LPTRANSMIT_FILE_BUFFERS buffers,DWORD flags) {
+    if(!allow_send(s,NULL,0))return FALSE;
+    return original_transmitfile_export(s,file,size,per_send,ov,buffers,flags);
+}
+static BOOL PASCAL hook_transmitpackets(SOCKET s,LPTRANSMIT_PACKETS_ELEMENT elements,DWORD count,DWORD size,LPOVERLAPPED ov,DWORD flags) {
+    if(!allow_send(s,NULL,0))return FALSE;
+    return original_transmitpackets(s,elements,count,size,ov,flags);
+}
+static int WSAAPI hook_ioctl(SOCKET s,DWORD code,LPVOID in,DWORD inlen,LPVOID out,DWORD outlen,LPDWORD bytes,LPWSAOVERLAPPED ov,LPWSAOVERLAPPED_COMPLETION_ROUTINE done) {
+    if(config.root)return original_ioctl(s,code,in,inlen,out,outlen,bytes,ov,done);
+    /* Registered I/O can submit directly through a provider function table.
+       This experiment has no safe adapter for it. Never hand that table out. */
+    if(code==SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER){WSASetLastError(WSAEACCES);return SOCKET_ERROR;}
+    if(code!=SIO_GET_EXTENSION_FUNCTION_POINTER)return original_ioctl(s,code,in,inlen,out,outlen,bytes,ov,done);
+    GUID guid={0};SIZE_T read=0;void *expected=NULL;
+    GUID cx=WSAID_CONNECTEX,sm=WSAID_WSASENDMSG,tf=WSAID_TRANSMITFILE,tp=WSAID_TRANSMITPACKETS;
+    GUID ax=WSAID_ACCEPTEX,ga=WSAID_GETACCEPTEXSOCKADDRS,dx=WSAID_DISCONNECTEX,rm=WSAID_WSARECVMSG;
+    if(inlen!=sizeof(guid)||!in||!ReadProcessMemory(GetCurrentProcess(),in,&guid,sizeof(guid),&read)||read!=sizeof(guid))goto deny;
+    if(!memcmp(&guid,&cx,sizeof(guid)))expected=target_connectex;
+    else if(!memcmp(&guid,&sm,sizeof(guid)))expected=target_sendmsg;
+    else if(!memcmp(&guid,&tf,sizeof(guid)))expected=target_transmitfile;
+    else if(!memcmp(&guid,&tp,sizeof(guid)))expected=target_transmitpackets;
+    else if(!memcmp(&guid,&ax,sizeof(guid))||!memcmp(&guid,&ga,sizeof(guid))||!memcmp(&guid,&dx,sizeof(guid))||!memcmp(&guid,&rm,sizeof(guid)))
+        return original_ioctl(s,code,in,inlen,out,outlen,bytes,ov,done);
+    else goto deny;
+    if(ov||done||outlen<sizeof(void*)||!out)goto deny;
+    int result=original_ioctl(s,code,in,inlen,out,outlen,bytes,NULL,NULL);
+    if(result==SOCKET_ERROR)return result;
+    void *actual=NULL;
+    if(!ReadProcessMemory(GetCurrentProcess(),out,&actual,sizeof(actual),&read)||read!=sizeof(actual)||actual!=expected)goto deny;
+    return 0;
+deny:
+    if(out&&outlen>=sizeof(void*)){void *empty=NULL;WriteProcessMemory(GetCurrentProcess(),out,&empty,sizeof(empty),NULL);}
+    if(bytes)*bytes=0;WSASetLastError(WSAEACCES);return SOCKET_ERROR;
+}
+static int known_socket(HANDLE handle) {
+    DWORD saved=GetLastError();int type=0,length=sizeof(type);
+    int yes=getsockopt((SOCKET)handle,SOL_SOCKET,SO_TYPE,(char*)&type,&length)==0;
+    SetLastError(saved);return yes;
+}
+static BOOL WINAPI hook_writefile(HANDLE h,LPCVOID data,DWORD size,LPDWORD written,LPOVERLAPPED ov) {
+    if(!config.root&&known_socket(h)&&!allow_send((SOCKET)h,NULL,0)){if(written)*written=0;SetLastError(ERROR_ACCESS_DENIED);return FALSE;}
+    return original_writefile(h,data,size,written,ov);
+}
+static BOOL WINAPI hook_writefileex(HANDLE h,LPCVOID data,DWORD size,LPOVERLAPPED ov,LPOVERLAPPED_COMPLETION_ROUTINE done) {
+    if(!config.root&&known_socket(h)&&!allow_send((SOCKET)h,NULL,0)){SetLastError(ERROR_ACCESS_DENIED);return FALSE;}
+    return original_writefileex(h,data,size,ov,done);
 }
 static int remote_call(HANDLE process,void *function,void *argument,DWORD *result) {
     HANDLE thread=CreateRemoteThread(process,NULL,0,(LPTHREAD_START_ROUTINE)function,argument,0,NULL);
@@ -269,6 +383,18 @@ static int own_hook(void *target,void *replacement,void **original) {
     if (first==0xe9 || first==0xeb || first==0xcc || (first==0xff && ((unsigned char*)target)[1]==0x25)) return 0;
     return MH_CreateHook(target,replacement,original)==MH_OK && MH_EnableHook(target)==MH_OK;
 }
+static void *extension(GUID guid,int type,int protocol,int family) {
+    SOCKET socket=WSASocketW(family,type,protocol,NULL,0,0);DWORD bytes=0;void *target=NULL;
+    if(socket==INVALID_SOCKET)return NULL;
+    int ok=WSAIoctl(socket,SIO_GET_EXTENSION_FUNCTION_POINTER,&guid,sizeof(guid),&target,sizeof(target),&bytes,NULL,NULL)==0&&bytes==sizeof(target);
+    closesocket(socket);return ok?target:NULL;
+}
+static int extension_hook(GUID guid,int type,int protocol,void **target,void *replacement,void **original) {
+    *target=extension(guid,type,protocol,AF_INET);
+    /* Unknown providers and different IPv6 implementations are not silently
+       treated as the IPv4 adapter. Require exact pointer agreement here. */
+    return *target&&extension(guid,type,protocol,AF_INET6)==*target&&own_hook(*target,replacement,original);
+}
 __declspec(dllexport) DWORD WINAPI EgressInitialize(void *argument) {
     if (InterlockedCompareExchange(&initialized,1,0)) return 0;
     EgressConfig *provided=(EgressConfig*)argument;
@@ -289,12 +415,25 @@ __declspec(dllexport) DWORD WINAPI EgressInitialize(void *argument) {
     HMODULE winsock=GetModuleHandleW(L"ws2_32.dll");
     if (!own_hook((void*)GetProcAddress(winsock,"connect"),hook_connect,(void**)&original_connect)) return 0;
     if (!own_hook((void*)GetProcAddress(winsock,"WSAConnect"),hook_wsaconnect,(void**)&original_wsaconnect)) return 0;
-    SOCKET socket=WSASocketW(AF_INET,SOCK_STREAM,IPPROTO_TCP,NULL,0,0); DWORD bytes=0;
-    GUID guid=WSAID_CONNECTEX; LPFN_CONNECTEX connectex=NULL;
-    int got=socket!=INVALID_SOCKET && WSAIoctl(socket,SIO_GET_EXTENSION_FUNCTION_POINTER,&guid,sizeof(guid),&connectex,sizeof(connectex),&bytes,NULL,NULL)==0;
-    if (socket!=INVALID_SOCKET) closesocket(socket);
-    if (!got || !own_hook((void*)connectex,hook_connectex,(void**)&original_connectex)) return 0;
-    EgressRequest ready=request_for(EGRESS_READY); ready.reserved=0x0f;
+    if(!own_hook((void*)GetProcAddress(winsock,"send"),hook_send,(void**)&original_send))return 130;
+    if(!own_hook((void*)GetProcAddress(winsock,"sendto"),hook_sendto,(void**)&original_sendto))return 131;
+    if(!own_hook((void*)GetProcAddress(winsock,"WSASend"),hook_wsasend,(void**)&original_wsasend))return 132;
+    if(!own_hook((void*)GetProcAddress(winsock,"WSASendTo"),hook_wsasendto,(void**)&original_wsasendto))return 133;
+    GUID cx=WSAID_CONNECTEX,sm=WSAID_WSASENDMSG,tf=WSAID_TRANSMITFILE,tp=WSAID_TRANSMITPACKETS;
+    if(!extension_hook(cx,SOCK_STREAM,IPPROTO_TCP,&target_connectex,hook_connectex,(void**)&original_connectex))return 134;
+    if(!extension_hook(sm,SOCK_DGRAM,IPPROTO_UDP,&target_sendmsg,hook_sendmsg,(void**)&original_sendmsg))return 135;
+    if(!extension_hook(tf,SOCK_STREAM,IPPROTO_TCP,&target_transmitfile,hook_transmitfile,(void**)&original_transmitfile))return 136;
+    if(!extension_hook(tp,SOCK_STREAM,IPPROTO_TCP,&target_transmitpackets,hook_transmitpackets,(void**)&original_transmitpackets))return 137;
+    void *sendmsg_export=(void*)GetProcAddress(winsock,"WSASendMsg");
+    if(sendmsg_export!=target_sendmsg&&!own_hook(sendmsg_export,hook_sendmsg_export,(void**)&original_sendmsg_export))return 138;
+    HMODULE mswsock=GetModuleHandleW(L"mswsock.dll");
+    void *transmitfile_export=mswsock?(void*)GetProcAddress(mswsock,"TransmitFile"):NULL;
+    if(!transmitfile_export||(transmitfile_export!=target_transmitfile&&!own_hook(transmitfile_export,hook_transmitfile_export,(void**)&original_transmitfile_export)))return 139;
+    if(!own_hook((void*)GetProcAddress(winsock,"WSAIoctl"),hook_ioctl,(void**)&original_ioctl))return 140;
+    HMODULE kernelbase=GetModuleHandleW(L"kernelbase.dll");
+    if(!own_hook((void*)GetProcAddress(kernelbase,"WriteFile"),hook_writefile,(void**)&original_writefile))return 141;
+    if(!own_hook((void*)GetProcAddress(kernelbase,"WriteFileEx"),hook_writefileex,(void**)&original_writefileex))return 142;
+    EgressRequest ready=request_for(EGRESS_READY); ready.reserved=EGRESS_HOOK_MASK;
     if (!decide(ready)) return 0;
     return EGRESS_MAGIC;
 }

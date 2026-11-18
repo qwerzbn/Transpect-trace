@@ -27,7 +27,7 @@ def test_tcp_destination_rules_and_ipv4_mapped_are_equivalent():
     {"targets": [{"address": "fe80::1%12", "port": 443}]},
     {"targets": [{"address": "127.0.0.1", "port": True}]},
     {"targets": [{"address": "127.0.0.1", "port": 0}]},
-    {"targets": [{"address": "127.0.0.1", "port": 443, "protocol": "udp"}]},
+    {"targets": [{"address": "127.0.0.1", "port": 443, "protocol": "icmp"}]},
     {"targets": [{"address": "127.0.0.1", "port": 443, "action": "terminate"}]},
     {"targets": [{"address": "127.0.0.1", "port": 443}, {"address": "::ffff:127.0.0.1", "port": 443}]},
     {"allowed_image_hashes": ["not-a-sha256"]},
@@ -60,6 +60,35 @@ def test_root_cannot_be_misreported_as_tool_connect(monkeypatch, tmp_path):
     controller.members[10] = {"pid": 10, "creation_filetime": 20, "image_name": "codex.exe", "registered": True, "ready": True, "root": True}
     monkeypatch.setattr("transpect_trace.behavior.native_egress.inspect_process", lambda *_a, **_kw: {"creation_filetime": 20, "image_name": "codex.exe"})
     assert controller._handle(10, message(controller, kind=CONNECT)) == (False, 9)
+
+
+def test_tcp_proxy_permit_never_permits_udp_at_the_same_port():
+    policy = normalize_policy({'default_action': 'block', 'targets': [
+        {'address': '127.0.0.1', 'port': 7890, 'action': 'allow', 'protocol': 'tcp'}]})
+    assert destination_decision(policy, '127.0.0.1', 7890, 'tcp') == 'allow'
+    assert destination_decision(policy, '127.0.0.1', 7890, 'udp') == 'block'
+    assert destination_decision(policy, '127.0.0.1', 7891, 'tcp') == 'block'
+    assert destination_decision(policy, '127.0.0.1', 7890, 'raw') == 'block'
+
+
+def test_old_connect_only_dll_cannot_claim_complete_send_hook_readiness(monkeypatch, tmp_path):
+    from transpect_trace.behavior.native_egress import READY, HOOK_MASK, SEND
+    controller = EgressController({'pid': 10, 'creation_filetime': 20}, tmp_path / 'x.dll',
+        {'default_action': 'block'}, tmp_path)
+    identity = {'pid': 10, 'creation_filetime': 20, 'image_name': 'tool.exe',
+                'registered': True, 'ready': False, 'root': False}
+    controller.members[10] = identity
+    monkeypatch.setattr('transpect_trace.behavior.native_egress.inspect_process', lambda *a, **kw: identity)
+    values = list(message(controller, kind=READY)); values[7] = 0x0f
+    assert controller._handle(10, tuple(values)) == (False, 4)
+    values[7] = HOOK_MASK
+    assert controller._handle(10, tuple(values)) == (True, 0)
+    values[2] = SEND; values[7] = 17
+    assert controller._handle(10, tuple(values)) == (False, 10)
+    assert controller.records[-1]['protocol'] == 'udp'
+    assert controller.records[-1]['operation'] == 'send'
+    values[7] = 0
+    assert controller._handle(10, tuple(values)) == (False, 9)
 
 
 def test_wire_has_fixed_size_and_sequence():

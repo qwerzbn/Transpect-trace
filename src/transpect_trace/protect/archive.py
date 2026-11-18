@@ -117,7 +117,7 @@ class EncryptedRequestArchive:
         return hmac.new(subkey, data, hashlib.sha256).hexdigest()
 
     def save(self, kind: str, payload: bytes, *, now: datetime | None = None) -> ArchiveReceipt:
-        if kind not in {"model_request", "attachment"}:
+        if kind not in {"model_request", "attachment", "tool_command"}:
             raise ValueError("unsupported snapshot kind")
         if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_SNAPSHOT_BYTES:
             raise ValueError("invalid snapshot size")

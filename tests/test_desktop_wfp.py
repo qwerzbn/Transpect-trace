@@ -130,3 +130,12 @@ def test_native_utility_requires_explicit_vm_marker(tmp_path):
     result = subprocess.run([str(exe), "status", "S-1-5-18", "--isolated-vm"],
                             capture_output=True, text=True, check=False)
     assert result.returncode == 4
+    for args in (("proxy-lease", SID, "8765", "10", "11", "20", "21"),
+                 ("proxy-status", SID, "1", "2", "8765")):
+        result = subprocess.run([str(exe), *args], capture_output=True, text=True,
+                                check=False)
+        assert result.returncode == 2  # no VM marker, before opening BFE
+    result = subprocess.run([str(exe), "proxy-status", "S-1-5-18", "1", "2",
+                             "8765", "--isolated-vm"], capture_output=True,
+                            text=True, check=False)
+    assert result.returncode == 4

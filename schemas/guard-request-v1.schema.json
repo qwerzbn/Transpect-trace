@@ -31,6 +31,7 @@
     "kind": {
       "enum": [
         "model.request",
+        "tool.exec",
         "native.initialize",
         "native.ready",
         "native.outcome"
@@ -42,6 +43,7 @@
       "enum": [
         "http",
         "wss",
+        "process",
         "control"
       ],
       "title": "Protocol",
@@ -70,6 +72,12 @@
     },
     "payload_utf8": {
       "title": "Payload Utf8",
+      "type": "string"
+    },
+    "installed": {
+      "default": "",
+      "maxLength": 512,
+      "title": "Installed",
       "type": "string"
     },
     "captured_qpc": {

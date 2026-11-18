@@ -178,6 +178,113 @@ def test_shared_request_archive_requires_full_body(tmp_path):
         native.NativeCollectionEngine(config, shared_request_archive=True)
 
 
+_CODEX_THREAD = "00000000-0000-7000-8000-000000000001"
+_TURN_A = "00000000-0000-7000-8000-000000000002"
+_TURN_B = "00000000-0000-7000-8000-000000000003"
+
+
+def _history_engine(path):
+    config = gate.GateConfig.load(installer.write_gate_config(path, "enforce", None))
+    return native.NativeCollectionEngine(config, collection_file=path / "history.jsonl",
+                                         archive_full_body=True, shared_request_archive=True,
+                                         scrub_codex_denied_history=True)
+
+
+def _history_request(messages, turn, seq, *, protocol="http", thread=_CODEX_THREAD,
+                     wrap=False, incremental=False, **kwargs):
+    body = {"model": "test", "client_metadata": {"thread_id": thread, "turn_id": turn},
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": part} for part in parts]}
+                      for parts in messages], **kwargs}
+    if incremental:
+        body["previous_response_id"] = "prev"
+    if protocol == "wss":
+        body = {"type": "response.create", **({"response": body} if wrap else body)}
+    return _request(json.dumps(body, ensure_ascii=False, indent=2), seq, protocol=protocol)
+
+
+@pytest.mark.parametrize(("protocol", "wrap"), [("http", False), ("wss", False), ("wss", True)])
+def test_codex_history_scrubs_only_recorded_denial_with_new_safe_user_turn(tmp_path, protocol, wrap):
+    engine = _history_engine(tmp_path)
+    secret = "合成凭据 " + FAKE_KEY
+    routes = {"protocol": protocol, "wrap": wrap}
+    first = _history_request([[secret]], _TURN_A, 1, **routes)
+    denied, _ = engine.evaluate(first)
+    assert denied.decision == "deny" and denied.redacted_payload is None
+    following = _history_request([[secret], ["请回答 OK"]], _TURN_B, 2, **routes)
+    decision, audit = engine.evaluate(following)
+    assert (decision.decision, decision.reason) == ("allow", "HISTORICAL_BLOCK_SCRUBBED")
+    clean = decision.redacted_payload.encode()
+    assert len(clean) == len(following.payload_utf8.encode())
+    assert FAKE_KEY.encode() not in clean
+    payload = json.loads(clean)
+    message = (payload.get("response", payload))["input"][1]
+    assert message["content"] == [{"type": "input_text", "text": "请回答 OK"}]
+    assert audit["extra"]["forwarded_body_hmac"] == engine.gate._archive.keyed_digest(clean)
+    assert audit["extra"]["history_replacement_count"] == 1
+    _, archive_raw = engine.gate._archive.read(audit["archive_record_id"])
+    assert archive_raw == following.payload_utf8.encode()
+    retry, retry_audit = engine.evaluate(following)
+    assert retry.redacted_payload == decision.redacted_payload
+    assert retry.reason == decision.reason
+    assert retry_audit["extra"]["forwarded_body_hmac"] == audit["extra"]["forwarded_body_hmac"]
+
+
+def test_codex_recovery_requires_same_thread_distinct_turn_and_new_user_message(tmp_path):
+    engine = _history_engine(tmp_path)
+    def action(req):
+        return engine.evaluate(req)[0].decision
+
+    assert action(_history_request([[FAKE_KEY]], _TURN_A, 1)) == "deny"
+    for seq, request in enumerate((
+        _history_request([[FAKE_KEY]], _TURN_B, 2),
+        _history_request([[FAKE_KEY], ["ok"]], _TURN_A, 3),
+        _history_request([[FAKE_KEY, "ok"]], _TURN_B, 4),
+        _history_request([[FAKE_KEY], [FAKE_KEY]], _TURN_B, 5),
+        _history_request([[FAKE_KEY], ["ok"]], _TURN_B, 6, thread=_TURN_B),
+        _history_request([[FAKE_KEY], ["ok"]], None, 7),
+        _history_request([[FAKE_KEY], ["ok"]], _TURN_B, 8, incremental=True),
+        _history_request([[FAKE_KEY], ["ok"]], _TURN_B, 9, other=FAKE_KEY),
+    )):
+        assert action(request) == "deny", seq
+
+    fresh_engine = _history_engine(tmp_path / "restarted")
+    after_restart = _history_request([[FAKE_KEY], ["ok"]], _TURN_B, 10)
+    assert fresh_engine.evaluate(after_restart)[0].decision == "deny"
+
+
+def test_wss_denied_delta_uses_unique_message_id_and_complete_user_message(tmp_path):
+    msg = {"type": "message", "id": "msg_" + _TURN_A, "role": "user",
+           "content": [{"type": "input_text", "text": FAKE_KEY}]}
+    benign = {"type": "message", "id": "msg_" + _TURN_B, "role": "user",
+              "content": [{"type": "input_text", "text": "Reply about tea."}]}
+    system = {"type": "message", "role": "developer", "content": "Be concise."}
+    request = lambda entries, turn, seq, **kw: _history_request(
+        [], turn, seq, protocol="wss", input=entries, **kw)
+    cases = [
+        ([system, msg, benign], _TURN_B, {}, "allow"),
+        ([system, msg, benign], _TURN_A, {}, "deny"),
+        ([system, msg, benign], _TURN_B, {"thread": _TURN_B}, "deny"),
+        ([system, msg, benign], _TURN_B, {"incremental": True}, "deny"),
+        ([system, msg, benign, msg], _TURN_B, {}, "deny"),
+        ([system, msg, msg, benign], _TURN_B, {}, "deny"),
+        ([system, {**msg, "id": "msg_" + _CODEX_THREAD}, benign], _TURN_B, {}, "deny"),
+        ([system, msg, benign, {**msg, "id": "msg_" + _CODEX_THREAD}], _TURN_B, {}, "deny"),
+        ([system, {**msg, "content": msg["content"] + benign["content"]}, benign], _TURN_B, {}, "deny"),
+        ([system, {**msg, "role": "assistant"}, benign], _TURN_B, {}, "deny"),
+        ([system, benign, msg], _TURN_B, {}, "deny"),
+    ]
+    for index, (entries, turn_id, options, expected) in enumerate(cases):
+        engine = _history_engine(tmp_path / str(index))
+        assert engine.evaluate(request([msg], _TURN_A, 1, incremental=True))[0].decision == "deny"
+        decision, _ = engine.evaluate(request(entries, turn_id, 2, **options))
+        assert decision.decision == expected, index
+        if expected == "allow":
+            assert FAKE_KEY not in decision.redacted_payload
+        else:
+            assert decision.redacted_payload is None
+
+
 def test_shared_archive_failure_and_partial_capture_stay_denied(tmp_path, monkeypatch):
     engine = _shared_engine(tmp_path)
     body = _body("http_turn1")
@@ -491,14 +598,30 @@ def test_late_decision_is_recorded_as_the_pipe_will_enforce_it(tmp_path, monkeyp
 def test_pipe_deadline_supersedes_an_allow(tmp_path, monkeypatch):
     engine = _engine(tmp_path)
     monkeypatch.setattr(native, "DECISION_DEADLINE_SECONDS", 0.0)
-    decision, _ = engine.evaluate(_request(_body("http_turn1"), 1))
-    assert decision.decision == "allow"  # guard/pipe.py turns this into a block
+    decision, row = engine.evaluate(_request(_body("http_turn1"), 1))
+    assert (decision.decision, decision.redacted_payload, row["action"], row["reason"]) == (
+        "deny", None, "BLOCK", "DECISION_DEADLINE_EXCEEDED")
+    assert row["released_by_route"] is False
     rows = _rows(tmp_path)
     superseding = [r for r in rows if r["extra"].get("superseded_reason")]
     assert superseding and len(superseding) == len(rows) // 2
     assert all(not r["released_by_route"] for r in superseding)
     again = engine.collector.collect(_request(_body("http_turn1"), 2))
     assert (again.action, again.reason) == ("BLOCK", "DUPLICATE_INVOCATION")
+
+
+def test_superseding_audit_error_cannot_release_a_late_decision(tmp_path, monkeypatch):
+    engine = _engine(tmp_path)
+    monkeypatch.setattr(native, "DECISION_DEADLINE_SECONDS", 0.0)
+
+    def fail(*_):
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(engine.collector, "supersede", fail)
+    decision, row = engine.evaluate(_request(_body("http_turn1")))
+    assert decision.decision == row["route_decision"] == "deny"
+    assert decision.reason == "DECISION_DEADLINE_EXCEEDED"
+    assert decision.redacted_payload is None
 
 
 def test_engine_satisfies_pipe_server_contract(tmp_path):

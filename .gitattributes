@@ -1,5 +1,7 @@
 # Preserve upstream bytes: the native builder verifies vendored SHA-256 hashes.
 native/guard/third_party/** -text whitespace=-blank-at-eof,cr-at-eol
+# Upstream miniz.h contains a blank line with spaces. Preserve vendored bytes.
+native/guard/third_party/miniz/miniz.h -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
 patches/ecapture-windows/enhanced/** -text
 patches/ecapture-windows/target-bound/*.patch -text whitespace=-space-before-tab
 patches/ecapture-windows/target-bound/*.go -text
@@ -16,3 +18,12 @@ native/guard/guard.c                             text eol=crlf
 
 # Shell scripts must keep LF to run under bash.
 *.sh text eol=lf
+
+# The Codex session probes also record raw file hashes on Windows.
+src/transpect_trace/protect/codex_hook_gate.py       text eol=lf
+src/transpect_trace/guard/pipe.py                    text eol=lf
+src/transpect_trace/guard/codex_history_wire.py      text eol=lf
+src/transpect_trace/guard/desktop_service.py         text eol=crlf
+scripts/probe_codex_zstd_history.py                  text eol=lf
+scripts/probe_codex_wss_history.py                   text eol=lf
+scripts/probe_desktop_guard_failstop_current_lab.py  text eol=lf

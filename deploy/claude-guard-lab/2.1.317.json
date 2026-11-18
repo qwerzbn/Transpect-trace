@@ -1,0 +1,54 @@
+{
+  "schema": "transpect.claude-guard-lab.pin/1.0",
+  "claude_code_version": "2.1.317",
+  "binary": {
+    "name": "claude.exe",
+    "sha256": "26b01ec22df2c17ac7f5703aa547d36706e8d58412136ced0344a8ced4d86038"
+  },
+  "hooks": {
+    "request": {
+      "rva": "0x23b7bb0",
+      "prefix_hex": "554883ec20488d6c2420488b014c8d0d"
+    },
+    "read": {
+      "rva": "0x3c9a600",
+      "prefix_hex": "554157415641545657534883ec40488d6c"
+    }
+  },
+  "accepted": {
+    "schema": "transpect.claude-guard-lab.accepted/2.0",
+    "at": "2026-11-15T23:34:09",
+    "suite": "full",
+    "passed": 15,
+    "failed": 0,
+    "evidence": "26b01ec22df2-20261115-233328.jsonl",
+    "dll": "ttrace-guard-claude-c8c8d6f45443.dll",
+    "dll_sha256": "9d30cdb6c29fed68eaf285859bebf0edae506e858bd8795cafb15a256dc52452",
+    "pin_core_sha256": "acefc9c244bb20df94bc384737952c5a17e13a1a7967a4d173ffd2f608ae86a6",
+    "sources": {
+      "native/guard/claude_guard.c": "020e59ebe51140ba1b534d2b551a3ebf23f8bed8c32fa786aef4a031c99dec23",
+      "native/guard/third_party/jsmn/jsmn.h": "1ed6154dedf009212a08a397e9c4ed50a0ce31d5a8301bb294e137ae3188c13b",
+      "native/guard/third_party/minhook/include/MinHook.h": "62dff05e63155c6bf8135c36a0d79dedbdcaaede9da26fe38daf0bea34323e38",
+      "native/guard/third_party/minhook/src/buffer.c": "0ab484d7870c3a8e7a3a1ee61e2070072cf445ed85b619d4c4207fed34356d99",
+      "native/guard/third_party/minhook/src/buffer.h": "9769702bd625249e59a19ede05c84365fcc7707e1fa0e5df08df42227cee13e3",
+      "native/guard/third_party/minhook/src/hde/hde64.c": "824eafa315322e6da105a7ce4ec1fc0e0adeee0106d32152fbb0b59e709bd15c",
+      "native/guard/third_party/minhook/src/hde/hde64.h": "e99aa4997bda14b534c614c3d8cb78a72c4aca91a1212c8b03ec605d1d75e36e",
+      "native/guard/third_party/minhook/src/hde/pstdint.h": "604d1cdf45c5a95bc9cf1bbf39ca05ef83013541101d34971c5cd7577e3d5247",
+      "native/guard/third_party/minhook/src/hde/table64.h": "b774446d2f110ce954fb0a710f4693c5562ddbd8d56fe84106f2ee80db8b50a2",
+      "native/guard/third_party/minhook/src/hook.c": "edcce4c81985d7dd5b73feae96d6498c8f749b1bca4c3d2d9926ea9a17a84755",
+      "native/guard/third_party/minhook/src/trampoline.c": "f13a169f803ff5a8e45c58ce668b4377a9878c0fc4452369b8a1325065186b2b",
+      "native/guard/third_party/minhook/src/trampoline.h": "53ed9934492320617a27bfd952ffe7f5b7a4a1d09963d4512447082fe7b727b4",
+      "native/guard/third_party/miniz/miniz.c": "29a0c08c4610d20ab18381cbf18190f91b4b41d05c242376364756061b631f1d",
+      "native/guard/third_party/miniz/miniz.h": "2b9c48355793988f0d12b3cef357e52b741d744385157b59cb422237ea226501",
+      "native/guard/third_party/miniz/miniz_common.h": "d0770cc478923e33bf22820fc51bbe22b6b99c3230ce4f5fc10eea3debc75623",
+      "native/guard/third_party/miniz/miniz_export.h": "9a4af7e9eaba1d20e547b92154c07f4a443e86c03f818dce71ba9ec85e55138f",
+      "native/guard/third_party/miniz/miniz_tdef.c": "7b3baaa59f50116eb3e72a23302c505b76cb01cc456672f7957a74d9e7b44047",
+      "native/guard/third_party/miniz/miniz_tdef.h": "123050e3c876519828d3934899e0b003ad13a98114919d94f1e06b4b9d02a925",
+      "native/guard/third_party/miniz/miniz_tinfl.c": "7113a08a7722d671ce89b8de61fe6d02d0cadca0ff274ba357bf2a9dc85745ca",
+      "native/guard/third_party/miniz/miniz_tinfl.h": "2c89615a4cbc5de4eac5b861051849392ec698264ee7dd399ea587c592cf68d1",
+      "native/guard/third_party/miniz/miniz_zip.c": "bea8946aee21dadedc82267dbd359b1a662969f622267a12f6cfb52f9ce7bc33",
+      "native/guard/third_party/miniz/miniz_zip.h": "43d09867f79993a9ba1627cb1f3bbd78d3bf5ee0c91cd6e7527aa9ca1e3aed44"
+    },
+    "binary_sha256": "26b01ec22df2c17ac7f5703aa547d36706e8d58412136ced0344a8ced4d86038"
+  }
+}
